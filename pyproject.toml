@@ -1,0 +1,25 @@
+[project]
+name = "regev-factoring"
+version = "0.1.0"
+description = "Simulation and analysis of Regev's multidimensional factoring algorithm"
+requires-python = ">=3.10"
+dependencies = [
+    "qiskit>=1.0",
+    "qiskit-aer>=0.14",
+    "numpy",
+    "matplotlib",
+    "pylatexenc",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["regev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
