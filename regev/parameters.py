@@ -15,7 +15,29 @@ def _is_prime(num: int) -> bool:
 
 
 def validate_factor_input(N: int) -> dict:
-    """Check whether N is a useful input for the factoring simulation."""
+    """Check whether N is a useful input for the factoring simulation.
+
+    Rejects perfect powers as well as the obvious cases. Both reasons matter:
+
+    1. A perfect power N = m^k is factored by integer root extraction in
+       microseconds, so reporting it as a quantum factoring success would be
+       the same error as the contamination bug -- a classical step doing the
+       work the quantum sampling was supposed to do.
+
+    2. For an odd PRIME power p^k the quantum path cannot work at all. The
+       congruence u^2 = 1 (mod p^k) has only the solutions u = +-1, so the
+       difference-of-squares step in `relation_to_congruence` can never find a
+       nontrivial square root, no matter how many samples are drawn. Before
+       this check, N = 49 and N = 121 were accepted as valid, produced clean
+       (uncontaminated) bases, and then failed 0/50 while the pipeline
+       reported "no factors recovered from these samples" -- wording that
+       implies more samples would help. They would not.
+
+    Returns a dict with `valid`, `reason`, and `factor`/`other` populated when
+    the rejection itself reveals a factorisation.
+    """
+    from regev.bases import perfect_power, is_prime_basic
+
     if N <= 1:
         return {"valid": False, "reason": "N must be greater than 1.",
                 "factor": None, "other": None}
@@ -25,6 +47,26 @@ def validate_factor_input(N: int) -> dict:
     if _is_prime(N):
         return {"valid": False, "reason": "N is prime, so it has no nontrivial factors.",
                 "factor": None, "other": None}
+
+    pp = perfect_power(N)
+    if pp is not None:
+        base, exp = pp
+        if is_prime_basic(base):
+            reason = (
+                f"N = {base}^{exp} is an odd prime power. u^2 = 1 (mod N) has "
+                "only the trivial roots u = +-1, so Regev's difference-of-"
+                "squares step can never split it. Excluded as impossible, "
+                "not merely unlucky."
+            )
+        else:
+            reason = (
+                f"N = {base}^{exp} is a perfect power, factored classically by "
+                "integer root extraction. Excluded so a classical shortcut is "
+                "not reported as a quantum result."
+            )
+        return {"valid": False, "reason": reason,
+                "factor": base, "other": N // base}
+
     return {"valid": True, "reason": "N is an odd composite number.",
             "factor": None, "other": None}
 

@@ -51,7 +51,20 @@ def regev_relation_lattice(vectors, M: int, d: int, weight: int = 4):
         M: Fourier modulus per dimension (2^nd).
         d: number of dimensions.
         weight: scaling on the residual block. Larger values penalise
-            non-orthogonality more strongly. Results are stable for 1..8.
+            non-orthogonality more strongly, at the cost of letting the
+            exponent block grow.
+
+            The choice matters more than "stable for 1..8" (the previous
+            claim here) suggests. Measured on N = 77 over 1000 trials on
+            held-out seeds, ideal-sampling success at k = 3 runs 95.7% (w=1),
+            95.4% (w=2), 93.5% (w=4), 90.3% (w=8). No value dominates across
+            k, though: w=2 wins at k=3, ties at k=5, and gives up ~8 points of
+            separation against the random control at k=8 because it also lifts
+            the control. The default stays 4 for that reason, not because the
+            result is insensitive to it.
+
+            Sweeping weights and taking any success is NOT a free win -- see
+            the note in `regev_factor`.
 
     Returns:
         List of (L1_norm, e, residual) sorted by increasing norm.
@@ -146,9 +159,27 @@ def regev_factor(vectors, M, d, N, bases, primes, weight=4, verbose=True):
 
     # Single relations first, then pairwise sums -- a given relation often
     # yields only a trivial square root (u = +-1), so combinations are needed.
-    # Unordered pairs suffice: r + s == s + r. Pairwise DIFFERENCES were tried
-    # and changed nothing at N = 77 (the relations form a group and the
-    # reduced basis already spans it), so they are deliberately not included.
+    # Unordered pairs suffice: r + s == s + r.
+    #
+    # Three tempting extensions were implemented, measured, and REJECTED. Each
+    # raises the headline success rate; all three raise the RANDOM control by
+    # as much or more, which means the extra work is being done classically
+    # rather than by the quantum samples. Success rate alone is the wrong
+    # metric here -- the separation against the control is the result.
+    #
+    #   pairwise differences   ideal 99.0 -> 99.0, no change at all (relations
+    #                          form a group; the reduced basis already spans it)
+    #   short-vector enumeration (all +-1 combinations of the 5 shortest basis
+    #                          vectors)   ideal 99.0 -> 100.0, but random
+    #                          26.2 -> 95.0. Separation collapses 73 -> 5
+    #                          points: it brute-forces the relation space and
+    #                          factors N with no quantum input at all.
+    #   weight ensemble (retry over w = 1,2,4,8,16 and accept any success)
+    #                          ideal 99.0 -> 99.8, random 26.2 -> 51.0.
+    #                          Separation 73 -> 49. Multiple testing.
+    #
+    # Do not add these back without re-running scripts/control_experiment.py
+    # on BOTH arms.
     pool = list(rels)
     for r, s in combinations(rels, 2):
         pool.append([x + y for x, y in zip(r, s)])

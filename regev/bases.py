@@ -10,9 +10,16 @@ Here a prime dividing N is treated as a SETUP FAILURE for the experiment and
 surfaced separately so the instance can be excluded from results.
 """
 
-from math import gcd
+from math import gcd, isqrt
 
-__all__ = ["is_prime_basic", "generate_regev_bases", "is_contaminated"]
+__all__ = [
+    "is_prime_basic",
+    "generate_regev_bases",
+    "is_contaminated",
+    "integer_nth_root",
+    "perfect_power",
+    "is_prime_power",
+]
 
 
 def is_prime_basic(num: int) -> bool:
@@ -29,6 +36,68 @@ def is_prime_basic(num: int) -> bool:
             return False
         k += 2
     return True
+
+
+def integer_nth_root(x: int, k: int) -> int:
+    """Exact floor(x ** (1/k)) for x >= 0, k >= 1, with no float rounding.
+
+    Newton's method on integers. `round(x ** (1.0 / k))` is wrong for large x
+    -- double precision runs out well before these numbers do -- so the result
+    is computed exactly and then corrected.
+    """
+    if x < 0:
+        raise ValueError("x must be non-negative")
+    if k < 1:
+        raise ValueError("k must be at least 1")
+    if x < 2 or k == 1:
+        return x
+    if k == 2:
+        return isqrt(x)
+
+    r = 1 << ((x.bit_length() + k - 1) // k)  # >= true root
+    while True:
+        nxt = ((k - 1) * r + x // r ** (k - 1)) // k
+        if nxt >= r:
+            break
+        r = nxt
+    while r ** k > x:
+        r -= 1
+    while (r + 1) ** k <= x:
+        r += 1
+    return r
+
+
+def perfect_power(N: int):
+    """Return (base, exponent) with base**exponent == N and exponent > 1.
+
+    Returns the SMALLEST base (equivalently the largest exponent), so
+    64 -> (2, 6) rather than (8, 2). None if N is not a perfect power.
+
+    Only prime exponents need testing: if N = m^(ab) then N is also a perfect
+    a-th power.
+    """
+    if N < 4:
+        return None
+    for k in range(2, N.bit_length() + 1):
+        if not is_prime_basic(k):
+            continue
+        r = integer_nth_root(N, k)
+        if r > 1 and r ** k == N:
+            deeper = perfect_power(r)
+            if deeper:
+                return deeper[0], deeper[1] * k
+            return r, k
+    return None
+
+
+def is_prime_power(N: int) -> bool:
+    """True if N = p^k for a prime p and k >= 1."""
+    if N < 2:
+        return False
+    if is_prime_basic(N):
+        return True
+    pp = perfect_power(N)
+    return pp is not None and is_prime_basic(pp[0])
 
 
 def generate_regev_bases(N: int, d: int):

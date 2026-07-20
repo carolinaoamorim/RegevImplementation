@@ -1,16 +1,20 @@
 # Improvements to the Regev Factoring Simulation
 
+Made by Carolina Amorim, Owen Barnes, and Summer Malik during summer research on quantum computing at the University of Illinois at Urbana Champaign.
+
 What changed in this pass, why, and how each claim was verified.
 
-Summary: one methodological bug that inflated the headline result, a ~96x
-speedup of the lattice reduction, removal of dead and phantom code, and a test
-suite grown from 29 to 49 tests.
+Summary: two correctness bugs (one methodological bug that inflated the
+headline result, one instance class that could never have succeeded), a ~96x
+speedup of the lattice reduction, removal of dead and phantom code, three
+tempting "improvements" measured and rejected, and a test suite grown from
+29 to 85 tests.
 
 ---
 
 ## 1. The cherry-picking bug (most important)
 
-The repository already documented a "contamination bug", where trial division
+The repository documented a "contamination bug", where trial division
 factored `N` during basis selection and the result was reported as quantum
 computation. **The same class of error was still present, one layer up.**
 
@@ -168,22 +172,94 @@ lazily inside the one function that needs it.
 
 ---
 
-## 5. Algorithmic change tested and rejected
+## 5. Prime powers: an instance class that could never succeed
 
-`regev_factor` combined relations pairwise by sum only. Pairwise **differences**
-(and doubling) were implemented and benchmarked at k = 3 and k = 5, 300 trials
-each: **identical success rates**, 280/300 and 297/300 in both variants.
+`validate_factor_input` accepted **N = 49** and **N = 121** as valid inputs.
+They are odd, composite, and uncontaminated — bases 4, 9, 25 are coprime to
+both — so nothing in the pipeline screened them out.
 
-Relations form a group and the reduced basis already spans it, so differences
-add nothing. The change was **not** adopted — the code comment now records that
-it was tried and why it does not help, so nobody re-derives it.
+They fail **0/50** even at k = 16, and they always will:
 
-One real fix did land: the loop iterated ordered pairs, computing every sum
-twice (`r + s` and `s + r`). Now `itertools.combinations`.
+```text
+sqrt(1) mod 49  = {1, 48}      nontrivial: none
+sqrt(1) mod 121 = {1, 120}     nontrivial: none
+```
+
+For an odd prime power `p^k`, the congruence `u^2 = 1 (mod p^k)` has only the
+roots `u = ±1`. Regev's entire factoring step is "find a nontrivial square root
+of unity, take a gcd" — so there is nothing to find. No number of samples
+helps. Worse, the pipeline reported *"No factors recovered from these
+samples"*, wording that implies more samples would fix it.
+
+### The fix
+
+Added `integer_nth_root`, `perfect_power`, and `is_prime_power` to `bases.py`,
+and wired perfect-power detection into `validate_factor_input`, which now
+rejects these up front with the reason and the classically-extracted factor.
+
+Two distinct rejections, because the reasons differ:
+
+- **Prime power** (49, 121, 343) — the quantum path is *impossible*, not
+  unlucky.
+- **Composite perfect power** (225 = 15²) — Regev *could* split it, but
+  `isqrt` already did, in microseconds. Reporting it as a quantum success would
+  be the contamination bug again.
+
+`integer_nth_root` uses integer Newton iteration rather than `x ** (1.0 / k)`;
+a test pins the case `(2^53 + 1)^3`, where double precision gives the wrong
+root.
 
 ---
 
-## 6. Smaller corrections
+## 6. Three algorithmic changes tested and rejected
+
+Each of these **raises the headline success rate**. All three were rejected,
+because each raises the *random control* by as much or more — meaning the extra
+work is being done classically, not by the quantum samples.
+
+| change | ideal | random | separation |
+|--------|-------|--------|------------|
+| baseline (k=5) | 99.0% | 26.2% | **72.8 pts** |
+| + pairwise differences | 99.0% | 26.2% | 72.8 pts |
+| + short-vector enumeration | **100.0%** | 95.0% | **5.0 pts** |
+| + weight ensemble (w = 1,2,4,8,16) | 99.8% | 51.0% | 48.8 pts |
+
+- **Pairwise differences** change nothing at all. Relations form a group and
+  the reduced basis already spans it.
+- **Short-vector enumeration** (all ±1 combinations of the 5 shortest basis
+  vectors) hits a perfect 100% — and lifts random from 26% to 95%. It
+  brute-forces the relation space and factors N = 77 with *no quantum input*.
+  This is the contamination pattern for a third time, and 100% is exactly what
+  makes it tempting.
+- **Weight ensemble** (retry across weights, accept any success) is plain
+  multiple testing: five chances instead of one, for both arms.
+
+Success rate alone is the wrong metric. The separation is the result. These are
+documented in a comment in `regev_factor` so they are not re-derived.
+
+One real fix did land: the pool loop iterated *ordered* pairs, computing every
+sum twice (`r + s` and `s + r`). Now `itertools.combinations`.
+
+### Weight sensitivity
+
+`regev_relation_lattice`'s docstring claimed results were "stable for 1..8".
+Measured over 1000 trials on held-out seeds, they are not:
+
+| k | w=1 | w=2 | w=4 (default) | w=8 |
+|---|-----|-----|---------------|-----|
+| 3 | 95.7% | 95.4% | 93.5% | 90.3% |
+| 5 | 99.7% | 99.6% | 98.8% | 96.1% |
+| 8 | 99.9% | 100.0% | 99.8% | 99.2% |
+
+`w=2` beats the default at k=3 and ties at k=5 — but gives up ~8 points of
+control separation at k=8, because it lifts the control too. **No value
+dominates across k, so the default was left at 4** and the docstring corrected
+to report the real numbers. Changing it on the k=3 result alone would have been
+overfitting; the table above is from seeds held out from the tuning run.
+
+---
+
+## 7. Smaller corrections
 
 - `nearest_int` documented "ties away from zero"; it actually rounds ties
   toward `+infinity` (`nearest_int(-1/2) == 0`, which the existing test
@@ -198,7 +274,7 @@ twice (`r + s` and `s + r`). Now `itertools.combinations`.
 
 ---
 
-## 7. Test suite: 29 → 49
+## 8. Test suite: 29 → 85
 
 New `tests/test_reference.py` covers the exact distribution, bitstring
 decoding, and sampling. Tests assert independently-derived properties rather
