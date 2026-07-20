@@ -5,10 +5,14 @@ Made by Carolina Amorim, Owen Barnes, and Summer Malik during summer research on
 What changed in this pass, why, and how each claim was verified.
 
 Summary: two correctness bugs (one methodological bug that inflated the
-headline result, one instance class that could never have succeeded), a ~96x
-speedup of the lattice reduction, removal of dead and phantom code, three
-tempting "improvements" measured and rejected, and a test suite grown from
-29 to 85 tests.
+headline result, one instance class that could never have succeeded), two large
+speedups (~96x on the lattice reduction, ~1250x on the reference distribution),
+removal of dead and phantom code, three tempting "improvements" measured and
+rejected, and a test suite grown from 29 to 89 tests.
+
+The speedups are not cosmetic: they are what made the honest experiment
+affordable and what raised the demonstrated result from 99% vs 27% at N = 77
+to **99.3% vs 1.0% at N = 2021**.
 
 ---
 
@@ -146,8 +150,10 @@ At N = 77: `n = 7`, `d = 3`, `nd = 5`, so the register budget is
 And N = 77 is the *smallest* clean instance — anything larger is worse.
 
 Meanwhile `ideal_regev_distribution` computes the noiseless output distribution
-**exactly** in ~0.1 s. It is not an approximation of what Aer would produce; it
-is what Aer converges to given infinite shots and no noise.
+**exactly** in ~0.08 s — and after section 7, in 0.79 s even at N = 2021, an
+instance whose circuit would need well over 40 qubits. It is not an
+approximation of what Aer would produce; it is what Aer converges to given
+infinite shots and no noise.
 
 So the phantom modules were removed from the docs and replaced with a section
 explaining why the exact distribution is the correct tool here. A circuit is
@@ -259,7 +265,95 @@ overfitting; the table above is from seeds held out from the tuning run.
 
 ---
 
-## 7. Smaller corrections
+## 7. The reference distribution: one FFT instead of one per residue class
+
+This is what unblocked everything in section 8.
+
+`ideal_regev_distribution` grouped the `M^d` exponent vectors by their
+modular-exponentiation image, ran an FFT per group, and accumulated with a
+Python loop over all `M^d` outcomes *inside each group*. Cost scaled with the
+number of residue classes, which grows with the order of the subgroup the
+bases generate. N = 299 took **13.7 s**, and it was getting worse fast.
+
+### The identity
+
+The probability is
+
+```text
+p(w) = (1 / M^2d) * sum_y |sum_{x : f(x) = y} w^(-<w,x>)|^2
+```
+
+Expanding the square turns the sum over classes into a sum over **pairs**
+`(x, x')`. And `f(x) = f(x')` holds exactly when `e = x - x'` satisfies
+`prod a_i^{e_i} = 1 (mod N)` — that is, when `e` is a **relation**. The number
+of ordered pairs in the box `[0,M)^d` differing by `e` is `prod_i (M - |e_i|)`,
+so
+
+```text
+sum_y |...|^2 = sum over e in L, |e_i| < M, of  prod_i (M - |e_i|) * w^(-<w,e>)
+```
+
+The distribution is therefore a *single* FFT of the relation-lattice
+autocorrelation — no grouping, no per-class transform. The relation lattice is
+the same object `postprocess.py` searches, which is a pleasing symmetry: the
+forward simulation and the classical post-processing are both governed by `L`.
+
+### Result
+
+| instance | support `M^d` | before | after |
+|----------|---------------|--------|-------|
+| N = 77   | 32,768        | 0.62 s | 0.083 s |
+| N = 299  | 262,144       | 13.7 s | 0.011 s |
+| N = 2021 | 16,777,216    | not attemptable | 0.79 s |
+
+**1250x at N = 299.** Larger N is often *faster*, because a bigger modulus
+makes the relation lattice sparser — fewer points to accumulate.
+
+Verified exact: max deviation from the original construction is 2.8e-17
+(float noise) across several `N`, `d`, `M`, and base sets. The old
+per-class construction is kept in the test suite as an oracle
+(`test_single_fft_matches_per_class_construction`).
+
+`sample_ideal` was the next bottleneck — it called `sorted()` on all `M^d`
+outcome tuples, hopeless at 16.7M. It now inverse-transform-samples from a
+cached CDF and never materialises the outcome tuples. It is **bit-identical**
+to the previous sampler on the same seed, which is why none of the numbers in
+section 1 changed.
+
+An `N > 3.04e9` guard rejects moduli where `int64` residue products would
+silently overflow.
+
+---
+
+## 8. Larger instances: the main caveat, removed
+
+The previous open items said a larger `N` would sharpen the separation, and
+that N = 77's ~27% random success rate was "a limitation of the instance size".
+Section 7 made that testable. It was correct:
+
+`python scripts/control_experiment.py --scale` (300 trials per arm, seed 7):
+
+| N    | n  | d | M  | k  | ideal quantum | uniform random | separation |
+|------|----|---|----|----|---------------|----------------|------------|
+| 77   | 7  | 3 | 32 | 5  | 99.0%         | 27.0%          | 72.0 pts   |
+| 323  | 9  | 3 | 64 | 5  | 93.7%         | 6.7%           | 87.0 pts   |
+| 713  | 10 | 4 | 64 | 5  | 96.3%         | 3.7%           | 92.7 pts   |
+| 2021 | 11 | 4 | 64 | 5  | 90.0%         | 1.7%           | 88.3 pts   |
+| 2021 | 11 | 4 | 64 | 8  | 97.7%         | 1.3%           | 96.3 pts   |
+| 2021 | 11 | 4 | 64 | 12 | **99.3%**     | **1.0%**       | **98.3 pts** |
+
+The random control falls from 27% to 1% as `N` grows — at N = 77 a rank-3
+lattice over a 32-point range often contains a relation by luck, and that stops
+being true quickly. Feeding the larger instance a few more samples recovers the
+ideal arm to 99.3%.
+
+So the strongest defensible statement is no longer "99% vs 27% at N = 77" but
+**99.3% vs 1.0% at N = 2021**, with the caveat that motivated the original
+hedge now measured away rather than argued away.
+
+---
+
+## 9. Smaller corrections
 
 - `nearest_int` documented "ties away from zero"; it actually rounds ties
   toward `+infinity` (`nearest_int(-1/2) == 0`, which the existing test
@@ -274,7 +368,7 @@ overfitting; the table above is from seeds held out from the tuning run.
 
 ---
 
-## 8. Test suite: 29 → 85
+## 10. Test suite: 29 → 89
 
 New `tests/test_reference.py` covers the exact distribution, bitstring
 decoding, and sampling. Tests assert independently-derived properties rather
@@ -305,13 +399,20 @@ python scripts/control_experiment.py --sweep    # regenerates the table above
   distribution is noiseless by construction. Applying a depolarising channel to
   the ideal distribution is a cheaper first approximation that would not need
   30 qubits.
-- **Larger clean instances.** At N = 77 the random control still succeeds ~27%
-  of the time, because a rank-3 lattice sometimes contains a relation by
-  chance. A larger `N` would sharpen the separation, at `M^d` cost in the exact
-  distribution.
+- ~~**Larger clean instances.**~~ Done — see section 8. Now reaches N = 2021,
+  where the random control succeeds 1.0% of the time instead of 27%.
+- **Beyond N ≈ 2021.** The next parameter step is `M = 128, d = 4`, i.e. `M^d`
+  = 268M cells ≈ 2 GB for the output array alone. The single-FFT engine is no
+  longer the constraint; storing a dense distribution over the whole of
+  `Z_M^d` is. Sampling does not actually need the dense array — walking the
+  relation lattice directly, or sampling one register at a time from
+  conditional marginals, would lift the ceiling again.
 - **Aux-register uncomputation**, if a circuit is ever written: run the modexp
   on `|x>|1>|0>` and assert aux returns to `|0>`, or the measured distribution
   is entangled with garbage.
+- **Wider moduli.** `_relation_autocorrelation` keeps residues in `int64`, so
+  `N` is capped at ~3.04e9 by a guard. Object dtype or a split-multiply would
+  lift it, though `M^d` binds long before that does.
 - The `regev_parameters(mode="notebook")` string now refers to a `notebooks/`
   directory that is empty. The API string was left alone to avoid breaking
   callers, but it is a dangling name.

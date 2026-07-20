@@ -68,6 +68,51 @@ def run_arm(sampler, label, *, N, d, M, bases, primes, k, trials, seed):
     return successes
 
 
+# (N, k) pairs spanning the instance sizes the exact distribution can reach.
+# All are odd, composite, non-perfect-power, and coprime to the first d primes.
+SCALE_INSTANCES = [(77, 5), (323, 5), (713, 5), (2021, 5), (2021, 8), (2021, 12)]
+
+
+def run_scale(trials: int, seed: int):
+    """Show how the quantum/random separation sharpens with instance size.
+
+    At N = 77 the random control succeeds ~27% of the time, because a rank-3
+    lattice over a 32-point range often contains a relation by chance. That
+    was previously the headline caveat on the whole experiment. Larger N
+    shrinks it to noise.
+    """
+    print(f"trials = {trials} per arm, seed = {seed}\n")
+    print("      N   n  d    M   k |     ideal quantum |    uniform random | separation")
+    for N, k in SCALE_INSTANCES:
+        params = regev_parameters(N)
+        d, M = params["d"], params["M"]
+        bases, primes, trivial = generate_regev_bases(N, d)
+        if trivial or not validate_factor_input(N)["valid"]:
+            print(f"  {N}: skipped (contaminated or invalid)")
+            continue
+
+        counts = {}
+        for name, sampler in (
+            ("q", lambda rng, kk=k: sample_ideal(bases, N, d, M, kk, rng)),
+            ("u", lambda rng, kk=k: sample_uniform(d, M, kk, rng)),
+        ):
+            rng = random.Random(seed)
+            counts[name] = sum(
+                regev_factor(sampler(rng), M, d, N, bases, primes, verbose=False)
+                is not None
+                for _ in range(trials)
+            )
+
+        ql, qh = wilson_interval(counts["q"], trials)
+        ul, uh = wilson_interval(counts["u"], trials)
+        print(
+            f"  {N:5d} {params['n']:3d}  {d}  {M:3d} {k:3d} | "
+            f"{counts['q'] * 100 / trials:5.1f}% [{ql * 100:4.1f},{qh * 100:5.1f}] | "
+            f"{counts['u'] * 100 / trials:5.1f}% [{ul * 100:4.1f},{uh * 100:4.1f}] | "
+            f"{(counts['q'] - counts['u']) * 100 / trials:6.1f} pts"
+        )
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("-N", type=int, default=77, help="modulus to factor")
@@ -75,7 +120,16 @@ def main():
     ap.add_argument("--trials", type=int, default=300)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--sweep", action="store_true", help="sweep k rather than fix it")
+    ap.add_argument(
+        "--scale",
+        action="store_true",
+        help="sweep N instead, showing how separation sharpens with instance size",
+    )
     args = ap.parse_args()
+
+    if args.scale:
+        run_scale(args.trials, args.seed)
+        return
 
     check = validate_factor_input(args.N)
     if not check["valid"]:

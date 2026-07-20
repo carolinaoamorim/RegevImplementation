@@ -15,7 +15,7 @@ from regev.reference import (
     ideal_regev_distribution,
     total_variation_distance,
 )
-from regev.sampling import ideal_distribution_cached, sample_ideal, sample_uniform
+from regev.sampling import ideal_probability_array, sample_ideal, sample_uniform
 
 N77, D77, M77 = 77, 3, 32
 BASES77 = [4, 9, 25]
@@ -143,9 +143,57 @@ def test_sample_ideal_does_draw_the_zero_vector():
 
 
 def test_cache_returns_consistent_data():
-    a = ideal_distribution_cached(BASES77, N77, D77, M77)
-    b = ideal_distribution_cached(tuple(BASES77), N77, D77, M77)
-    assert a[0] == b[0] and a[1] == b[1]
+    """List and tuple `bases` must hit the same cache entry."""
+    import numpy as np
+
+    a = ideal_probability_array(BASES77, N77, D77, M77)
+    b = ideal_probability_array(tuple(BASES77), N77, D77, M77)
+    assert np.array_equal(a, b)
+
+
+def test_array_and_dict_forms_agree(dist77):
+    """The dict wrapper must not drift from the array it wraps."""
+    p = ideal_probability_array(BASES77, N77, D77, M77)
+    assert p.shape == (M77,) * D77
+    assert max(abs(float(p[w]) - dist77[w]) for w in dist77) < 1e-15
+
+
+def test_single_fft_matches_per_class_construction():
+    """Guard the autocorrelation identity against the definition it replaced.
+
+    Groups the M^d exponent vectors by modular-exponentiation image and FFTs
+    each class -- the original O(classes) construction -- and requires the
+    single-FFT engine to reproduce it. Run on a small case so it stays cheap.
+    """
+    import numpy as np
+    from itertools import product as iproduct
+
+    from regev.reference import ideal_regev_distribution_array
+
+    bases, N, d, M = [4, 9, 25], 77, 3, 8
+    groups = {}
+    for x in iproduct(range(M), repeat=d):
+        v = 1
+        for ai, xi in zip(bases, x):
+            v = v * pow(ai, xi, N) % N
+        groups.setdefault(v, []).append(x)
+
+    expected = np.zeros((M,) * d)
+    for xs in groups.values():
+        arr = np.zeros((M,) * d, dtype=complex)
+        for x in xs:
+            arr[x] = 1.0
+        expected += np.abs(np.fft.fftn(arr, norm="ortho")) ** 2 / M ** d
+
+    got = ideal_regev_distribution_array(bases, N, d, M)
+    assert np.abs(expected - got).max() < 1e-12
+
+
+def test_distribution_rejects_oversized_modulus():
+    from regev.reference import ideal_regev_distribution_array
+
+    with pytest.raises(ValueError, match="overflow"):
+        ideal_regev_distribution_array([4, 9], 10 ** 12, 2, 4)
 
 
 def test_sample_uniform_shape_and_reproducibility():
@@ -153,3 +201,22 @@ def test_sample_uniform_shape_and_reproducibility():
     b = sample_uniform(D77, M77, 10, random.Random(5))
     assert a == b and len(a) == 10
     assert all(len(w) == D77 and all(0 <= x < M77 for x in w) for w in a)
+
+
+def test_large_instance_is_tractable():
+    """The single-FFT engine must reach instances the old one could not.
+
+    N = 2021 has d = 4, M = 64, so the support is 16.7M points. The previous
+    per-residue-class construction needed one FFT per class over an array that
+    size, plus an M^d Python loop inside each. This asserts the whole
+    distribution is now built in one pass and is a valid probability vector.
+    """
+    import numpy as np
+
+    from regev.reference import ideal_regev_distribution_array
+
+    p = ideal_regev_distribution_array([4, 9, 25, 49], 2021, 4, 64)
+    assert p.shape == (64,) * 4
+    assert p.sum() == pytest.approx(1.0, abs=1e-9)
+    assert p.min() >= 0.0
+    assert np.unravel_index(int(p.argmax()), p.shape) == (0, 0, 0, 0)

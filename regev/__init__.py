@@ -14,20 +14,22 @@ from regev.postprocess import (
 )
 from regev.reference import (
     ideal_regev_distribution,
+    ideal_regev_distribution_array,
     total_variation_distance,
     counts_to_distribution,
     bitstring_to_regev_vector,
 )
-from regev.sampling import sample_ideal, sample_uniform, ideal_distribution_cached
+from regev.sampling import sample_ideal, sample_uniform, ideal_probability_array
 
 __all__ = [
     "ideal_regev_distribution",
+    "ideal_regev_distribution_array",
+    "ideal_probability_array",
     "total_variation_distance",
     "counts_to_distribution",
     "bitstring_to_regev_vector",
     "sample_ideal",
     "sample_uniform",
-    "ideal_distribution_cached",
     "regev_parameters",
     "validate_factor_input",
     "generate_regev_bases",

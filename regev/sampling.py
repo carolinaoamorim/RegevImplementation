@@ -21,26 +21,31 @@ random vectors.
 
 from functools import lru_cache
 
-from regev.reference import ideal_regev_distribution
+from regev.reference import ideal_regev_distribution_array
 
-__all__ = ["ideal_distribution_cached", "sample_ideal", "sample_uniform"]
+__all__ = ["ideal_probability_array", "sample_ideal", "sample_uniform"]
 
 
 @lru_cache(maxsize=8)
-def _cached(bases: tuple, N: int, d: int, M: int):
-    """Distribution as parallel (outcomes, weights) tuples, computed once.
+def _cached_cdf(bases: tuple, N: int, d: int, M: int):
+    """(cdf, probability array) for the exact distribution, computed once.
 
-    The brute-force distribution costs a full FFT per residue class, so the
-    control experiment would otherwise recompute it on every trial.
+    Only the flat cumulative array is needed to sample, so the M^d outcome
+    tuples are never materialised. That matters: at N = 2021 the support is
+    64^4 = 16.7M points, and a list of 16.7M Python tuples costs gigabytes,
+    while the CDF is a 134 MB float64 array.
     """
-    dist = ideal_regev_distribution(list(bases), N, d, M)
-    outcomes = sorted(dist)
-    return outcomes, [dist[w] for w in outcomes]
+    import numpy as np
+
+    p = ideal_regev_distribution_array(list(bases), N, d, M)
+    cdf = np.cumsum(p.ravel())
+    cdf /= cdf[-1]
+    return cdf, p
 
 
-def ideal_distribution_cached(bases, N: int, d: int, M: int):
-    """(outcomes, weights) for the exact ideal distribution, memoised."""
-    return _cached(tuple(bases), N, d, M)
+def ideal_probability_array(bases, N: int, d: int, M: int):
+    """Exact probability array of shape (M,)*d, memoised."""
+    return _cached_cdf(tuple(bases), N, d, M)[1]
 
 
 def sample_ideal(bases, N: int, d: int, M: int, k: int, rng):
@@ -49,6 +54,12 @@ def sample_ideal(bases, N: int, d: int, M: int, k: int, rng):
     This is what a noiseless quantum computer running the circuit would
     return, including the uninformative w = 0 outcome and the low-probability
     tail. No filtering, no reranking.
+
+    Inverse-transform sampling on the cached CDF. Draws are taken one uniform
+    at a time from `rng` and located with a binary search, which reproduces
+    `random.choices(population, weights=...)` exactly -- the outcomes are in
+    lexicographic order, which is also C order for `unravel_index`, so the
+    same seed yields the same samples as before this was vectorised.
 
     Args:
         bases: [a_1, ..., a_d].
@@ -59,8 +70,13 @@ def sample_ideal(bases, N: int, d: int, M: int, k: int, rng):
     Returns:
         List of k tuples of length d.
     """
-    outcomes, weights = ideal_distribution_cached(bases, N, d, M)
-    return rng.choices(outcomes, weights=weights, k=k)
+    import numpy as np
+
+    cdf, _ = _cached_cdf(tuple(bases), N, d, M)
+    hi = cdf.size - 1
+    us = np.fromiter((rng.random() for _ in range(k)), dtype=np.float64, count=k)
+    flat = np.minimum(np.searchsorted(cdf, us, side="right"), hi)
+    return [tuple(int(c) for c in np.unravel_index(i, (M,) * d)) for i in flat]
 
 
 def sample_uniform(d: int, M: int, k: int, rng):
