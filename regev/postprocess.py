@@ -16,6 +16,7 @@ Imports nothing from Qiskit, so the post-processing can be tested against
 classically generated samples with no simulator present.
 """
 
+from itertools import combinations
 from math import gcd
 
 from regev.lattice import lll
@@ -143,13 +144,14 @@ def regev_factor(vectors, M, d, N, bases, primes, weight=4, verbose=True):
         print("LLL basis vectors:", [e for _, e, _ in cands])
         print("verified relations:", rels)
 
-    # Single relations first, then pairwise sums (cheap, often needed since a
-    # given relation may only yield a trivial square root).
+    # Single relations first, then pairwise sums -- a given relation often
+    # yields only a trivial square root (u = +-1), so combinations are needed.
+    # Unordered pairs suffice: r + s == s + r. Pairwise DIFFERENCES were tried
+    # and changed nothing at N = 77 (the relations form a group and the
+    # reduced basis already spans it), so they are deliberately not included.
     pool = list(rels)
-    for r in rels:
-        for s in rels:
-            if r is not s:
-                pool.append([x + y for x, y in zip(r, s)])
+    for r, s in combinations(rels, 2):
+        pool.append([x + y for x, y in zip(r, s)])
 
     for e in pool:
         res = relation_to_congruence(e, primes, N)

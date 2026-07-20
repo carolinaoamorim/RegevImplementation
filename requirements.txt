@@ -1,6 +1,5 @@
-qiskit>=1.0
-qiskit-aer>=0.14
+# Runtime: numpy alone (FFT in the exact reference distribution).
+# Nothing in the package imports Qiskit -- see README, "Why there is no
+# circuit module". Install it only if you are adding circuit work.
 numpy
-matplotlib
-pylatexenc
 pytest>=7.0

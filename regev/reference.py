@@ -9,7 +9,12 @@ Only tractable for small M^d (e.g. N = 77 gives M^d = 32^3 = 32768).
 
 from itertools import product
 
-__all__ = ["ideal_regev_distribution", "total_variation_distance", "counts_to_distribution"]
+__all__ = [
+    "ideal_regev_distribution",
+    "total_variation_distance",
+    "counts_to_distribution",
+    "bitstring_to_regev_vector",
+]
 
 
 def ideal_regev_distribution(bases, N: int, d: int, M: int) -> dict:
@@ -54,10 +59,30 @@ def ideal_regev_distribution(bases, N: int, d: int, M: int) -> dict:
     return probs
 
 
+def bitstring_to_regev_vector(bitstring: str, d: int, nd: int) -> tuple:
+    """Decode one Qiskit measurement bitstring into a vector w in Z_M^d.
+
+    Qiskit prints classical bits little-endian: the leftmost character is the
+    highest-index clbit. Register 0 therefore occupies the RIGHTMOST nd
+    characters, so the chunks are reversed after splitting.
+
+    Spaces (which Qiskit inserts between separate classical registers) are
+    stripped, so both "01010 11100" and "0101011100" decode identically.
+
+    Defined here rather than in a simulator module so that `reference` stays
+    importable with no Qiskit present.
+    """
+    bits = bitstring.replace(" ", "")
+    if len(bits) != d * nd:
+        raise ValueError(
+            f"bitstring of length {len(bits)} does not match d*nd = {d * nd}"
+        )
+    chunks = [bits[i * nd:(i + 1) * nd] for i in range(d)]
+    return tuple(int(c, 2) for c in reversed(chunks))
+
+
 def counts_to_distribution(counts, d: int, nd: int) -> dict:
     """Convert Aer counts into a w -> probability dict."""
-    from regev.simulate import bitstring_to_regev_vector
-
     total = sum(counts.values())
     dist = {}
     for bitstring, c in counts.items():

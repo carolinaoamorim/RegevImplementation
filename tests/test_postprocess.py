@@ -16,9 +16,12 @@ from regev.postprocess import (
     relation_to_congruence,
     regev_factor,
 )
+from regev.sampling import sample_ideal, sample_uniform
 
-# Ideal Regev samples for N = 77, d = 3, M = 32, bases (4, 9, 25).
-# Highest-probability vectors of the exact distribution (see regev.reference).
+# A fixed known-good input for the deterministic unit tests below: the five
+# highest-probability vectors of the exact distribution for N = 77, d = 3,
+# M = 32, bases (4, 9, 25). These are a FIXTURE, not an experiment -- see
+# test_quantum_beats_random_control for the sampled measurement.
 N77_VECTORS = [(4, 2, 17), (28, 30, 15), (19, 26, 13), (13, 6, 19), (2, 17, 9)]
 N77 = 77
 D77, M77 = 3, 32
@@ -94,34 +97,43 @@ def test_quantum_beats_random_control():
     """THE control experiment.
 
     If uniformly random vectors factor N as often as the quantum samples do,
-    the end-to-end result is not evidence the circuit works. Quantum samples
-    should yield a full basis of relations; random vectors should mostly not.
+    the end-to-end result is not evidence the circuit works.
 
-    Note: at N = 77 random vectors succeed occasionally (a small lattice
-    sometimes contains a relation by luck), so this asserts a separation,
+    Both arms are genuinely resampled every trial. An earlier version of this
+    test re-ran the same fixed five vectors 20 times and called it 20 trials;
+    that measures nothing but the variance of a constant, and it silently gave
+    the quantum arm the best case in the distribution. The ideal arm here
+    draws from the true distribution, w = 0 and long tail included.
+
+    At N = 77 random vectors still succeed sometimes (a rank-3 lattice
+    occasionally contains a relation by luck), so this asserts a separation,
     not that random never succeeds.
     """
-    random.seed(7)
-    trials = 20
+    trials, k = 60, 5
+    rng = random.Random(7)
 
-    q_rel = 0
+    q_succ = q_rel = 0
+    r_succ = r_rel = 0
     for _ in range(trials):
-        cands = regev_relation_lattice(N77_VECTORS, M77, D77)
-        q_rel += len([e for _, e, _ in cands if is_relation(e, BASES77, N77)])
+        qv = sample_ideal(BASES77, N77, D77, M77, k, rng)
+        q_rel += len([e for _, e, _ in regev_relation_lattice(qv, M77, D77)
+                      if is_relation(e, BASES77, N77)])
+        q_succ += regev_factor(qv, M77, D77, N77, BASES77, PRIMES77,
+                               verbose=False) is not None
 
-    r_rel = 0
-    r_succ = 0
-    for _ in range(trials):
-        rv = [tuple(random.randrange(M77) for _ in range(D77)) for _ in range(5)]
-        cands = regev_relation_lattice(rv, M77, D77)
-        r_rel += len([e for _, e, _ in cands if is_relation(e, BASES77, N77)])
-        if regev_factor(rv, M77, D77, N77, BASES77, PRIMES77, verbose=False):
-            r_succ += 1
+        rv = sample_uniform(D77, M77, k, rng)
+        r_rel += len([e for _, e, _ in regev_relation_lattice(rv, M77, D77)
+                      if is_relation(e, BASES77, N77)])
+        r_succ += regev_factor(rv, M77, D77, N77, BASES77, PRIMES77,
+                               verbose=False) is not None
 
-    q_avg = q_rel / trials
-    r_avg = r_rel / trials
+    q_avg, r_avg = q_rel / trials, r_rel / trials
 
-    assert q_avg >= 2.5, f"quantum samples gave only {q_avg} relations/basis"
+    assert q_succ / trials >= 0.85, f"ideal sampling factored only {q_succ}/{trials}"
+    assert r_succ < q_succ / 2, f"no separation: random {r_succ} vs ideal {q_succ}"
+    assert q_avg >= 2.5, f"ideal samples gave only {q_avg} relations/basis"
     assert r_avg < 1.5, f"random gave {r_avg} relations/basis -- no separation"
-    assert q_avg > 2 * r_avg, f"insufficient separation: {q_avg} vs {r_avg}"
-    assert r_succ < trials, "random control succeeded every time -- pipeline is vacuous"
+    assert r_succ > 0, (
+        "random control never succeeded -- suspicious at this instance size; "
+        "check the control is actually running"
+    )

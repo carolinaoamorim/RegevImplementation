@@ -12,8 +12,22 @@ from regev.postprocess import (
     eval_relation,
     relation_to_congruence,
 )
+from regev.reference import (
+    ideal_regev_distribution,
+    total_variation_distance,
+    counts_to_distribution,
+    bitstring_to_regev_vector,
+)
+from regev.sampling import sample_ideal, sample_uniform, ideal_distribution_cached
 
 __all__ = [
+    "ideal_regev_distribution",
+    "total_variation_distance",
+    "counts_to_distribution",
+    "bitstring_to_regev_vector",
+    "sample_ideal",
+    "sample_uniform",
+    "ideal_distribution_cached",
     "regev_parameters",
     "validate_factor_input",
     "generate_regev_bases",
