@@ -517,20 +517,18 @@ python scripts/control_experiment.py --noise    # noise table  (section 10)
 
 ## Open items
 
-Most of the previous list was resolved this round. What resolved what:
+Most of the issues encountered in the previous versions were resolved:
 
-- ~~**Noise analysis.**~~ Done, circuit-free — section 10. A depolarising
+- **Noise analysis.** A depolarising
   mixture on the output distribution; the remaining gap is coherent gate error,
   which does need a circuit.
-- ~~**Larger clean instances.**~~ Done — section 8. Reaches N = 2021, random
+- **Larger clean instances.**Reaches N = 2021, random
   control down to 1.0%.
-- ~~**Wider moduli.**~~ Done — the int64 path now falls back to exact
+- **Wider moduli.**The int64 path now falls back to exact
   object-dtype arithmetic above `N^2 = 2^63` instead of raising, verified
   bit-identical to the fast path (`test_wide_modulus_uses_exact_object_path`).
-- ~~**The dangling `notebook` name.**~~ Done — the mode is now `"regev"`, with
-  `"notebook"` kept as a documented back-compat alias.
 
-Genuinely remaining, and each needs real new work rather than a tweak:
+Remaining:
 
 - **Beyond N ≈ 2021.** The ceiling is now memory, not time: `M = 128, d = 4` is
   268M cells ≈ 2 GB for the dense output array. Lifting it means sampling
