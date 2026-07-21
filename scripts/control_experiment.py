@@ -1,9 +1,11 @@
 """Quantum-vs-random control experiment for Regev post-processing.
 
-Reproduces the table in the README:
+Reproduces the tables in the README:
 
     python scripts/control_experiment.py            # single k
     python scripts/control_experiment.py --sweep    # k = 3, 5, 8, 12, 16
+    python scripts/control_experiment.py --scale    # sweep N
+    python scripts/control_experiment.py --noise    # sweep depolarising rate
 
 Both arms are genuinely sampled. The "ideal quantum" arm draws from the exact
 output distribution of the noiseless circuit (`regev.reference`), including
@@ -113,14 +115,48 @@ def run_scale(trials: int, seed: int):
         )
 
 
+NOISE_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9, 1.0]
+
+
+def run_noise(N: int, k: int, trials: int, seed: int):
+    """Sweep the depolarising rate: how much noise the post-processing tolerates.
+
+    lam = 0 is the ideal quantum sampler, lam = 1 is the uniform-random control
+    (the two arms of the main experiment), so this interpolates between them.
+    """
+    from regev.noise import noisy_tvd_from_ideal, sample_noisy
+
+    params = regev_parameters(N, mode="resolved")
+    d, M = params["d"], params["M"]
+    bases, primes, trivial = generate_regev_bases(N, d)
+    if trivial:
+        raise SystemExit(f"N = {N} is contaminated; pick a clean instance.")
+
+    print(f"N = {N} | d = {d} | M = {M} (resolved) | k = {k} | "
+        f"trials = {trials}, seed = {seed}")
+    print("  depolarising rate -> success (identical post-processing)\n")
+    print("  lam    success   95% CI (Wilson)   TVD from ideal")
+    for lam in NOISE_LEVELS:
+        rng = random.Random(seed)
+        succ = sum(
+            regev_factor(sample_noisy(bases, N, d, M, k, lam, rng),
+                        M, d, N, bases, primes, verbose=False) is not None
+            for _ in range(trials)
+        )
+        lo, hi = wilson_interval(succ, trials)
+        tvd = noisy_tvd_from_ideal(bases, N, d, M, lam)
+        print(f"  {lam:0.2f}  {succ * 100 / trials:6.1f}%   "
+              f"[{lo * 100:5.1f}, {hi * 100:5.1f}]      {tvd:.3f}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("-N", type=int, default=77, help="modulus to factor")
     ap.add_argument("-k", type=int, default=5, help="measured vectors per trial")
     ap.add_argument("--trials", type=int, default=300)
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--mode", default="notebook",
-                    choices=["notebook", "cover_2n", "resolved"],
+    ap.add_argument("--mode", default="regev",
+                    choices=["regev", "notebook", "cover_2n", "resolved"],
                     help="register-sizing mode (see regev.parameters)")
     ap.add_argument("--sweep", action="store_true", help="sweep k rather than fix it")
     ap.add_argument(
@@ -128,10 +164,18 @@ def main():
         action="store_true",
         help="sweep N instead, showing how separation sharpens with instance size",
     )
+    ap.add_argument(
+        "--noise",
+        action="store_true",
+        help="sweep the depolarising rate at fixed N, k (circuit-free noise model)",
+    )
     args = ap.parse_args()
 
     if args.scale:
         run_scale(args.trials, args.seed)
+        return
+    if args.noise:
+        run_noise(args.N, args.k, args.trials, args.seed)
         return
 
     check = validate_factor_input(args.N)
@@ -149,7 +193,7 @@ def main():
 
     res = resolution_report(bases, args.N, M)
     print(f"N = {args.N} | n = {params['n']} | d = {d} | M = {M} "
-          f"| mode = {args.mode} | bases = {bases}")
+            f"| mode = {args.mode} | bases = {bases}")
     print(f"base orders = {res['orders']} | M/max_order = {res['ratio']:.2f}")
     if not res["resolved"]:
         print("  WARNING: under-resolved -- " + res["reason"])
@@ -160,7 +204,7 @@ def main():
     for k in ([3, 5, 8, 12, 16] if args.sweep else [args.k]):
         print(f"  -- k = {k} measured vectors --")
         common = dict(N=args.N, d=d, M=M, bases=bases, primes=primes,
-                      k=k, trials=args.trials, seed=args.seed)
+                        k=k, trials=args.trials, seed=args.seed)
         run_arm(lambda rng, kk: sample_ideal(bases, args.N, d, M, kk, rng),
                 "ideal quantum", **common)
         run_arm(lambda rng, kk: sample_uniform(d, M, kk, rng),

@@ -83,8 +83,10 @@ def regev_parameters(N: int, mode: str = "notebook") -> dict:
         mode: "cover_2n" sets d*nd >= 2n, matching Shor's total exponent
             qubit count -- which gives away Regev's asymptotic gate-count
             advantage and is only useful as a controlled comparison.
-            "notebook" uses floor(n/d + d), closer to Regev's true parameter
-            regime. Default is "notebook" for that reason.
+            "regev" uses floor(n/d + d), closer to Regev's true parameter
+            regime; it is the default for that reason. ("notebook" is a
+            deprecated alias -- the name predates this package layout and
+            referred to a notebooks/ directory that no longer exists.)
             "resolved" enlarges nd until M exceeds every base order, so the
             near-orthogonality the post-processing relies on actually holds.
             It requires computing the orders (a simulation-only quantity) and,
@@ -92,18 +94,18 @@ def regev_parameters(N: int, mode: str = "notebook") -> dict:
             when the goal is a clean demonstration rather than a faithful
             parameter regime -- see the caution below.
 
-    Caution: the "notebook" formula is Regev-asymptotic and at these tiny n it
-    routinely produces M <= max base order (e.g. N = 299, 323, 391, 437), where
-    at least one register is under-resolved and the orthogonality argument is
-    unsound. `regev.bases.resolution_report` diagnoses this, and "resolved"
-    mode avoids it. The returned dict always carries a `resolved` flag.
+    Caution: the "regev" formula is asymptotic and at these tiny n it routinely
+    produces M <= max base order (e.g. N = 299, 323, 391, 437), where at least
+    one register is under-resolved and the orthogonality argument is unsound.
+    `regev.bases.resolution_report` diagnoses this, and "resolved" mode avoids
+    it. The returned dict always carries a `resolved` flag.
     """
     n = N.bit_length()
     d = math.ceil(math.sqrt(n))
 
     if mode == "cover_2n":
         nd = math.ceil((2 * n) / d)
-    elif mode == "notebook":
+    elif mode in ("regev", "notebook"):  # "notebook" kept as a back-compat alias
         nd = math.floor((n / d) + d)
     elif mode == "resolved":
         from regev.bases import generate_regev_bases, multiplicative_order
@@ -116,7 +118,9 @@ def regev_parameters(N: int, mode: str = "notebook") -> dict:
             while (2 ** nd) <= max_order:
                 nd += 1
     else:
-        raise ValueError("mode must be 'notebook', 'cover_2n', or 'resolved'.")
+        raise ValueError(
+            "mode must be 'regev' (alias 'notebook'), 'cover_2n', or 'resolved'."
+        )
 
     params = {
         "N": N,

@@ -19,8 +19,9 @@ __all__ = [
     "bitstring_to_regev_vector",
 ]
 
-# int64 products stay exact while N^2 fits in a signed 64-bit word.
-_MAX_MODULUS = 3_037_000_499
+# Residue products reach N^2; int64 holds them while N^2 < 2^63. At or below
+# this N the fast int64 path is used, above it an exact object-dtype fallback.
+_MAX_MODULUS = 3_037_000_499  # floor(sqrt(2^63 - 1))
 
 
 def _relation_autocorrelation(bases, N: int, d: int, M: int):
@@ -39,11 +40,16 @@ def _relation_autocorrelation(bases, N: int, d: int, M: int):
     span = 2 * M - 1
     off = M - 1
 
+    # Residue products reach N^2. int64 holds that while N^2 < 2^63; beyond
+    # that, fall back to object arrays of Python ints, which are exact at any
+    # width (slower, but M^d binds long before N does).
+    res_dtype = np.int64 if N <= _MAX_MODULUS else object
+
     # tables[i][j] = a_i^(j - off) mod N, covering exponents -(M-1) .. M-1.
     tables = []
     for a in bases:
         inv_a = pow(a, -1, N)
-        t = np.empty(span, dtype=np.int64)
+        t = np.empty(span, dtype=res_dtype)
         t[off] = 1
         v = 1
         for e in range(1, M):
@@ -62,12 +68,12 @@ def _relation_autocorrelation(bases, N: int, d: int, M: int):
     # first dimension is iterated instead of materialised, which bounds peak
     # memory at span^(d-1) rather than span^d.
     if d == 1:
-        rest_res = np.ones(1, dtype=np.int64)
+        rest_res = np.ones(1, dtype=res_dtype)
         rest_w = np.ones(1, dtype=np.float64)
         rest_idx = ()
     else:
         shape_rest = (span,) * (d - 1)
-        rest_res = np.ones(shape_rest, dtype=np.int64)
+        rest_res = np.ones(shape_rest, dtype=res_dtype)
         rest_w = np.ones(shape_rest, dtype=np.float64)
         for i in range(1, d):
             sh = [1] * (d - 1)
@@ -117,12 +123,6 @@ def ideal_regev_distribution_array(bases, N: int, d: int, M: int):
         numpy array of shape (M,)*d, indexed by w, summing to 1.
     """
     import numpy as np
-
-    if N > _MAX_MODULUS:
-        raise ValueError(
-            f"N = {N} exceeds {_MAX_MODULUS}; int64 residue products would "
-            "overflow. Widen _relation_autocorrelation to object dtype first."
-        )
 
     A = _relation_autocorrelation(bases, N, d, M)
     p = np.fft.fftn(A).real / float(M) ** (2 * d)

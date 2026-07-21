@@ -8,8 +8,9 @@ Summary: two correctness bugs (one methodological bug that inflated the
 headline result, one instance class that could never have succeeded), two large
 speedups (~96x on the lattice reduction, ~1250x on the reference distribution),
 removal of dead and phantom code, three tempting "improvements" measured and
-rejected, a resolution guard for a fourth silent-failure mode, and a test suite
-grown from 29 to 112 tests.
+rejected, a resolution guard for a fourth silent-failure mode, a circuit-free
+noise analysis, wide-modulus support, and a test suite grown from 29 to 129
+tests.
 
 The speedups are not cosmetic: they are what made the honest experiment
 affordable and what raised the demonstrated result from 99% vs 27% at N = 77
@@ -157,9 +158,9 @@ approximation of what Aer would produce; it is what Aer converges to given
 infinite shots and no noise.
 
 So the phantom modules were removed from the docs and replaced with a section
-explaining why the exact distribution is the correct tool here. A circuit is
-genuinely needed only for **noise**, which the exact computation cannot model —
-that is now stated as the real open item.
+explaining why the exact distribution is the correct tool here. A circuit would
+be needed only for **coherent gate-level noise**; the leading-order effect of
+decoherence on a sampling experiment is captured circuit-free in section 10.
 
 ---
 
@@ -417,7 +418,55 @@ and there is a principled one-flag path to a resolved instance.
 
 ---
 
-## 10. Smaller corrections
+## 10. Noise analysis, without a circuit
+
+The standing open item was noise. It seemed to need the circuit that section 3
+argues against building — but the leading-order effect of noise on a *sampling*
+experiment can be applied straight to the output distribution.
+
+`regev/noise.py` implements the **depolarising** model: with probability `lam`
+a run decoheres and returns a uniform-random vector, else the ideal outcome, so
+
+```text
+p_noisy = (1 - lam) * p_ideal + lam * uniform.
+```
+
+This is exact for a global depolarising channel, and it has a clean
+interpretation the rest of the project sets up for free: `lam = 0` is the ideal
+quantum sampler and `lam = 1` is the uniform-random control — the two arms of
+the main experiment. The noise sweep therefore measures exactly how far the
+post-processing can be pushed from one toward the other before the signal is
+gone. It also finally exercises `total_variation_distance`, the metric
+`reference.py` was written for; the sweep confirms the closed form
+`TVD(noisy, ideal) = lam · TVD(uniform, ideal)`.
+
+N = 77, 300 trials per rate, seed 7
+(`python scripts/control_experiment.py --noise -k K`):
+
+| depolarising `lam` | success, k = 5 | success, k = 12 | TVD from ideal |
+|--------------------|----------------|-----------------|----------------|
+| 0.0                | 99.3%          | 100.0%          | 0.000          |
+| 0.2                | 92.0%          | 97.0%           | 0.184          |
+| 0.4                | 73.3%          | 92.3%           | 0.367          |
+| 0.5                | 67.3%          | 85.0%           | 0.459          |
+| 0.7                | 47.3%          | 70.3%           | 0.643          |
+| 1.0                | 23.0%          | 36.3%           | 0.918          |
+
+The result worth stating: **more samples buy noise tolerance.** At 50%
+depolarising, k = 5 has decayed to 67% but k = 12 still factors 85% of the
+time — because the post-processing only needs a few good vectors among the k,
+and doubling k roughly doubles the expected count of clean ones. This is the
+qualitative robustness Regev's multi-sample structure is supposed to give, now
+measured rather than asserted.
+
+What this model does **not** capture is coherent/gate error — it treats a
+failed run as fully randomising. A real circuit would be needed for that (and
+for the aux-uncomputation check), which remains the honest boundary of a
+circuit-free study.
+
+---
+
+## 11. Smaller corrections
 
 - `nearest_int` documented "ties away from zero"; it actually rounds ties
   toward `+infinity` (`nearest_int(-1/2) == 0`, which the existing test
@@ -432,7 +481,7 @@ and there is a principled one-flag path to a resolved instance.
 
 ---
 
-## 11. Test suite: 29 → 112
+## 12. Test suite: 29 → 129
 
 New `tests/test_reference.py` covers the exact distribution, bitstring
 decoding, and sampling. Tests assert independently-derived properties rather
@@ -448,35 +497,48 @@ than stored numbers:
 - TVD is symmetric, zero on identical inputs, one on disjoint support
 - bitstring decoding: register order, space handling, bounds, length mismatch
 
+New test files this round: `test_reference.py` (exact distribution, decoding,
+sampling, the single-FFT-vs-per-class oracle, wide moduli), `test_powers.py`
+(prime-power rejection), `test_resolution.py` (orders, the resolution guard,
+`resolved` mode), and `test_noise.py` (the depolarising model, its linear-in-
+`lam` TVD, and monotone success decay). Tests assert independently-derived
+properties rather than stored numbers.
+
 Verification commands:
 
 ```bash
-pytest                                          # 49 passed in 0.58s
-python scripts/control_experiment.py --sweep    # regenerates the table above
+pytest                                          # 129 passed in 3.2s
+python scripts/control_experiment.py --sweep    # k-sweep table (section 1)
+python scripts/control_experiment.py --scale    # N-sweep table (section 8)
+python scripts/control_experiment.py --noise    # noise table  (section 10)
 ```
 
 ---
 
 ## Open items
 
-- **Noise analysis.** Requires an actual circuit, since the exact reference
-  distribution is noiseless by construction. Applying a depolarising channel to
-  the ideal distribution is a cheaper first approximation that would not need
-  30 qubits.
-- ~~**Larger clean instances.**~~ Done — see section 8. Now reaches N = 2021,
-  where the random control succeeds 1.0% of the time instead of 27%.
-- **Beyond N ≈ 2021.** The next parameter step is `M = 128, d = 4`, i.e. `M^d`
-  = 268M cells ≈ 2 GB for the output array alone. The single-FFT engine is no
-  longer the constraint; storing a dense distribution over the whole of
-  `Z_M^d` is. Sampling does not actually need the dense array — walking the
-  relation lattice directly, or sampling one register at a time from
-  conditional marginals, would lift the ceiling again.
-- **Aux-register uncomputation**, if a circuit is ever written: run the modexp
-  on `|x>|1>|0>` and assert aux returns to `|0>`, or the measured distribution
-  is entangled with garbage.
-- **Wider moduli.** `_relation_autocorrelation` keeps residues in `int64`, so
-  `N` is capped at ~3.04e9 by a guard. Object dtype or a split-multiply would
-  lift it, though `M^d` binds long before that does.
-- The `regev_parameters(mode="notebook")` string now refers to a `notebooks/`
-  directory that is empty. The API string was left alone to avoid breaking
-  callers, but it is a dangling name.
+Most of the previous list was resolved this round. What resolved what:
+
+- ~~**Noise analysis.**~~ Done, circuit-free — section 10. A depolarising
+  mixture on the output distribution; the remaining gap is coherent gate error,
+  which does need a circuit.
+- ~~**Larger clean instances.**~~ Done — section 8. Reaches N = 2021, random
+  control down to 1.0%.
+- ~~**Wider moduli.**~~ Done — the int64 path now falls back to exact
+  object-dtype arithmetic above `N^2 = 2^63` instead of raising, verified
+  bit-identical to the fast path (`test_wide_modulus_uses_exact_object_path`).
+- ~~**The dangling `notebook` name.**~~ Done — the mode is now `"regev"`, with
+  `"notebook"` kept as a documented back-compat alias.
+
+Genuinely remaining, and each needs real new work rather than a tweak:
+
+- **Beyond N ≈ 2021.** The ceiling is now memory, not time: `M = 128, d = 4` is
+  268M cells ≈ 2 GB for the dense output array. Lifting it means sampling
+  *without* materialising the whole distribution — walking the relation lattice
+  directly, or drawing one register at a time from conditional marginals. That
+  is a real algorithm to design and validate, not a constant-factor fix, so it
+  is left honestly open.
+- **Coherent / gate-level noise**, and the **aux-register uncomputation** check
+  (`|x>|1>|0>` must return aux to `|0>`): both require an actual circuit, which
+  section 3 explains is out of reach at these instance sizes. This is the real
+  boundary of a circuit-free study, not a gap to paper over.

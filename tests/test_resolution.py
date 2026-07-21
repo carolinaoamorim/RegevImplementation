@@ -110,3 +110,14 @@ def test_parameters_carry_resolution_flag():
 def test_bad_mode_rejected():
     with pytest.raises(ValueError):
         regev_parameters(77, mode="nonsense")
+
+
+def test_notebook_is_alias_for_regev():
+    """The 'notebook' name is kept working but 'regev' is the real one."""
+    a = regev_parameters(437, "regev")
+    b = regev_parameters(437, "notebook")
+    assert (a["nd"], a["M"]) == (b["nd"], b["M"])
+
+
+def test_default_mode_is_regev():
+    assert regev_parameters(437)["nd"] == regev_parameters(437, "regev")["nd"]

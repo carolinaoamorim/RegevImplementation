@@ -189,11 +189,34 @@ def test_single_fft_matches_per_class_construction():
     assert np.abs(expected - got).max() < 1e-12
 
 
-def test_distribution_rejects_oversized_modulus():
-    from regev.reference import ideal_regev_distribution_array
+def test_wide_modulus_uses_exact_object_path():
+    """N above the int64 threshold must still compute exactly, not raise.
 
-    with pytest.raises(ValueError, match="overflow"):
-        ideal_regev_distribution_array([4, 9], 10 ** 12, 2, 4)
+    The residue products reach N^2 > 2^63, so the engine falls back to
+    object-dtype Python ints. Correctness is cross-checked against the int64
+    path by forcing the same small instance down both.
+    """
+    import numpy as np
+
+    import regev.reference as R
+
+    N = 300_000_000_007  # ~3e11, N^2 well past 2^63; coprime to 4 and 9
+    assert N > R._MAX_MODULUS and N * N > 2 ** 63
+    bases = [4, 9]  # coprime to N (N is not divisible by 2 or 3)
+    p = R.ideal_regev_distribution_array(bases, N, 2, 8)
+    assert p.shape == (8, 8)
+    assert p.sum() == pytest.approx(1.0, abs=1e-9)
+    assert p.min() >= 0.0
+
+    # object path must equal int64 path on a small, in-range instance
+    fast = R.ideal_regev_distribution_array([4, 9], 77, 2, 16)
+    saved = R._MAX_MODULUS
+    try:
+        R._MAX_MODULUS = 1  # force object dtype
+        slow = R.ideal_regev_distribution_array([4, 9], 77, 2, 16)
+    finally:
+        R._MAX_MODULUS = saved
+    assert np.abs(fast - slow).max() < 1e-15
 
 
 def test_sample_uniform_shape_and_reproducibility():

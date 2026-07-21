@@ -3,7 +3,13 @@
 __version__ = "0.1.0"
 
 from regev.parameters import regev_parameters, validate_factor_input
-from regev.bases import generate_regev_bases, is_prime_basic, is_contaminated
+from regev.bases import (
+    generate_regev_bases,
+    is_prime_basic,
+    is_contaminated,
+    multiplicative_order,
+    resolution_report,
+)
 from regev.lattice import lll
 from regev.postprocess import (
     regev_relation_lattice,
@@ -20,6 +26,12 @@ from regev.reference import (
     bitstring_to_regev_vector,
 )
 from regev.sampling import sample_ideal, sample_uniform, ideal_probability_array
+from regev.noise import (
+    depolarizing_lambda,
+    noisy_distribution,
+    sample_noisy,
+    noisy_tvd_from_ideal,
+)
 
 __all__ = [
     "ideal_regev_distribution",
@@ -30,11 +42,17 @@ __all__ = [
     "bitstring_to_regev_vector",
     "sample_ideal",
     "sample_uniform",
+    "depolarizing_lambda",
+    "noisy_distribution",
+    "sample_noisy",
+    "noisy_tvd_from_ideal",
     "regev_parameters",
     "validate_factor_input",
     "generate_regev_bases",
     "is_prime_basic",
     "is_contaminated",
+    "multiplicative_order",
+    "resolution_report",
     "lll",
     "regev_relation_lattice",
     "regev_factor",
