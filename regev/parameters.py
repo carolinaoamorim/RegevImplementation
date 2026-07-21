@@ -85,6 +85,18 @@ def regev_parameters(N: int, mode: str = "notebook") -> dict:
             advantage and is only useful as a controlled comparison.
             "notebook" uses floor(n/d + d), closer to Regev's true parameter
             regime. Default is "notebook" for that reason.
+            "resolved" enlarges nd until M exceeds every base order, so the
+            near-orthogonality the post-processing relies on actually holds.
+            It requires computing the orders (a simulation-only quantity) and,
+            like "cover_2n", gives up Regev's register-size advantage. Use it
+            when the goal is a clean demonstration rather than a faithful
+            parameter regime -- see the caution below.
+
+    Caution: the "notebook" formula is Regev-asymptotic and at these tiny n it
+    routinely produces M <= max base order (e.g. N = 299, 323, 391, 437), where
+    at least one register is under-resolved and the orthogonality argument is
+    unsound. `regev.bases.resolution_report` diagnoses this, and "resolved"
+    mode avoids it. The returned dict always carries a `resolved` flag.
     """
     n = N.bit_length()
     d = math.ceil(math.sqrt(n))
@@ -93,10 +105,20 @@ def regev_parameters(N: int, mode: str = "notebook") -> dict:
         nd = math.ceil((2 * n) / d)
     elif mode == "notebook":
         nd = math.floor((n / d) + d)
-    else:
-        raise ValueError("mode must be either 'cover_2n' or 'notebook'.")
+    elif mode == "resolved":
+        from regev.bases import generate_regev_bases, multiplicative_order
 
-    return {
+        nd = math.floor((n / d) + d)  # start from the notebook size
+        bases, _, trivial = generate_regev_bases(N, d)
+        if not trivial:
+            max_order = max(multiplicative_order(a, N) for a in bases)
+            # smallest nd with 2^nd > max_order, never shrinking below notebook
+            while (2 ** nd) <= max_order:
+                nd += 1
+    else:
+        raise ValueError("mode must be 'notebook', 'cover_2n', or 'resolved'.")
+
+    params = {
         "N": N,
         "n": n,
         "d": d,
@@ -106,4 +128,15 @@ def regev_parameters(N: int, mode: str = "notebook") -> dict:
         # x registers + y (n) + aux (n+1); the multiplier's internal flag
         # qubit is included in aux.
         "estimated_total_qubits": d * nd + n + (n + 1),
+        "mode": mode,
     }
+
+    # Attach a resolution flag when the instance is clean enough to size one.
+    from regev.bases import generate_regev_bases, resolution_report
+
+    bases, _, trivial = generate_regev_bases(N, d)
+    if trivial:
+        params["resolved"] = None  # contaminated: resolution is moot
+    else:
+        params["resolved"] = resolution_report(bases, N, params["M"])["resolved"]
+    return params

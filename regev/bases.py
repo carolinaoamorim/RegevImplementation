@@ -19,6 +19,8 @@ __all__ = [
     "integer_nth_root",
     "perfect_power",
     "is_prime_power",
+    "multiplicative_order",
+    "resolution_report",
 ]
 
 
@@ -142,3 +144,65 @@ def is_contaminated(N: int, d: int) -> bool:
     """
     _, _, trivial = generate_regev_bases(N, d)
     return len(trivial) > 0
+
+
+def multiplicative_order(a: int, N: int) -> int:
+    """Smallest k >= 1 with a^k = 1 (mod N). Requires gcd(a, N) = 1.
+
+    A simulation-only quantity: on real hardware the order is exactly what the
+    quantum step is there to hide. Here it is used to check that the register
+    size M can actually resolve it -- see `resolution_report`.
+    """
+    if gcd(a % N, N) != 1:
+        raise ValueError(f"a = {a} is not invertible mod N = {N}")
+    k, x = 1, a % N
+    while x != 1:
+        x = x * a % N
+        k += 1
+    return k
+
+
+def resolution_report(bases, N: int, M: int) -> dict:
+    """Check whether M resolves the multiplicative orders of the bases.
+
+    Regev's post-processing rests on measured vectors being *approximately*
+    orthogonal to the relations, which comes from the QFT_M concentrating near
+    multiples of M / ord(a_i). An M-point QFT cannot resolve a period that is
+    >= M -- the same aliasing limit as any DFT -- so if some base order is at
+    least M, that register is degenerate: `Z_M^d` fills with spurious exact
+    relations that exist independently of the measured data, and the random
+    control starts succeeding as often as the quantum arm (the vacuous-
+    experiment signature, e.g. N = 221 at M = 8).
+
+    `M > max order` is a SOUND necessary condition, and conservative: an
+    instance can pass it and still be marginal, so the random control remains
+    the final arbiter. But an instance that fails it is on broken footing and
+    should not be reported as a clean success.
+
+    Args:
+        bases: [a_1, ..., a_d], each coprime to N.
+        N: modulus.
+        M: Fourier modulus per dimension (2^nd).
+
+    Returns:
+        dict with orders, max_order, ratio = M / max_order, and `resolved`.
+    """
+    orders = [multiplicative_order(a, N) for a in bases]
+    max_order = max(orders)
+    resolved = M > max_order
+    if resolved:
+        reason = f"M = {M} exceeds every base order (max {max_order})."
+    else:
+        reason = (
+            f"M = {M} does not exceed the largest base order ({max_order}): "
+            "at least one register cannot be resolved, so near-orthogonality "
+            "fails and the random control may succeed spuriously. Increase nd."
+        )
+    return {
+        "orders": orders,
+        "max_order": max_order,
+        "M": M,
+        "ratio": M / max_order,
+        "resolved": resolved,
+        "reason": reason,
+    }

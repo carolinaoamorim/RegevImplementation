@@ -8,7 +8,8 @@ Summary: two correctness bugs (one methodological bug that inflated the
 headline result, one instance class that could never have succeeded), two large
 speedups (~96x on the lattice reduction, ~1250x on the reference distribution),
 removal of dead and phantom code, three tempting "improvements" measured and
-rejected, and a test suite grown from 29 to 89 tests.
+rejected, a resolution guard for a fourth silent-failure mode, and a test suite
+grown from 29 to 112 tests.
 
 The speedups are not cosmetic: they are what made the honest experiment
 affordable and what raised the demonstrated result from 99% vs 27% at N = 77
@@ -353,7 +354,70 @@ hedge now measured away rather than argued away.
 
 ---
 
-## 9. Smaller corrections
+## 9. Under-resolution: a fourth silent-invalid-experiment mode
+
+Regev's post-processing needs each measured vector to be *approximately*
+orthogonal to the relations. That approximation comes from `QFT_M`
+concentrating near multiples of `M / ord(a_i)`. An M-point DFT cannot resolve a
+period `>= M` — plain aliasing — so if any base order reaches `M`, that
+register is degenerate: `Z_M^d` fills with **exact** relations that exist
+independently of the measured data.
+
+The symptom is the now-familiar one: the uniform-random control starts
+factoring as often as the quantum arm. At **N = 221 with M = 8** (an order is
+exactly 8), random succeeds **83.5%** of the time — separation collapses from
+~90 points to 14. The experiment would look like a success and demonstrate
+nothing. This is the same failure family as contamination (section on the
+contamination bug) and cherry-picking (section 1), reached a different way.
+
+### It affects the default parameters
+
+`M > max_order` is a **sound** necessary condition (it is just the Nyquist
+limit), and the Regev-asymptotic `notebook` formula violates it for a majority
+of the clean simulable instances:
+
+```text
+   N   d nd   M   max order   resolved?
+  77   3  5   32     15        yes
+ 143   3  5   32     30        yes
+ 187   3  5   32     40        NO
+ 299   3  6   64     66        NO
+ 323   3  6   64     72        NO
+ 437   3  6   64     99        NO
+```
+
+These still often "work" — usually only the largest order exceeds `M`, and the
+other registers carry the result — but they run on an unsound orthogonality
+assumption, and both ideal success and separation measurably degrade.
+
+### The fix
+
+- `regev.bases.multiplicative_order` and `resolution_report(bases, N, M)`
+  compute the orders (a simulation-only quantity) and return the `M / max_order`
+  ratio and a `resolved` flag.
+- `regev_parameters` now carries that `resolved` flag, and a new
+  `mode="resolved"` enlarges `nd` until `M` exceeds every base order. Like
+  `cover_2n`, it gives up Regev's register-size advantage, and is documented as
+  a clean-demonstration mode rather than a faithful regime.
+- `scripts/control_experiment.py` prints the orders and ratio, and warns when
+  the chosen instance is under-resolved.
+
+Sizing up to `resolved` improves every previously-under-resolved instance
+(300-trial measurement, k = 5):
+
+| N   | notebook M | ideal / rand / sep | resolved M | ideal / rand / sep |
+|-----|-----------|--------------------|-----------|--------------------|
+| 187 | 32        | 88.5 / 13.5 / 75.0 | 64        | 94.5 / 12.5 / 82.0 |
+| 299 | 64        | 96.0 /  4.5 / 91.5 | 128       | 99.0 /  5.5 / 93.5 |
+| 437 | 64        | 96.0 /  2.5 / 93.5 | 128       | 98.5 /  4.5 / 94.0 |
+
+The default was **not** changed: `notebook` is Regev's intended regime and the
+right thing to model. But it is no longer silent about being under-resolved,
+and there is a principled one-flag path to a resolved instance.
+
+---
+
+## 10. Smaller corrections
 
 - `nearest_int` documented "ties away from zero"; it actually rounds ties
   toward `+infinity` (`nearest_int(-1/2) == 0`, which the existing test
@@ -368,7 +432,7 @@ hedge now measured away rather than argued away.
 
 ---
 
-## 10. Test suite: 29 → 89
+## 11. Test suite: 29 → 112
 
 New `tests/test_reference.py` covers the exact distribution, bitstring
 decoding, and sampling. Tests assert independently-derived properties rather

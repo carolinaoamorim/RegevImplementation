@@ -19,7 +19,7 @@ import argparse
 import math
 import random
 
-from regev.bases import generate_regev_bases
+from regev.bases import generate_regev_bases, resolution_report
 from regev.parameters import regev_parameters, validate_factor_input
 from regev.postprocess import is_relation, regev_factor, regev_relation_lattice
 from regev.sampling import sample_ideal, sample_uniform
@@ -119,6 +119,9 @@ def main():
     ap.add_argument("-k", type=int, default=5, help="measured vectors per trial")
     ap.add_argument("--trials", type=int, default=300)
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--mode", default="notebook",
+                    choices=["notebook", "cover_2n", "resolved"],
+                    help="register-sizing mode (see regev.parameters)")
     ap.add_argument("--sweep", action="store_true", help="sweep k rather than fix it")
     ap.add_argument(
         "--scale",
@@ -135,7 +138,7 @@ def main():
     if not check["valid"]:
         raise SystemExit(f"N = {args.N} unusable: {check['reason']}")
 
-    params = regev_parameters(args.N)
+    params = regev_parameters(args.N, mode=args.mode)
     d, M = params["d"], params["M"]
     bases, primes, trivial = generate_regev_bases(args.N, d)
     if trivial:
@@ -144,7 +147,13 @@ def main():
             "trial division would factor it during basis selection. Excluded."
         )
 
-    print(f"N = {args.N} | n = {params['n']} | d = {d} | M = {M} | bases = {bases}")
+    res = resolution_report(bases, args.N, M)
+    print(f"N = {args.N} | n = {params['n']} | d = {d} | M = {M} "
+          f"| mode = {args.mode} | bases = {bases}")
+    print(f"base orders = {res['orders']} | M/max_order = {res['ratio']:.2f}")
+    if not res["resolved"]:
+        print("  WARNING: under-resolved -- " + res["reason"])
+        print("  (re-run with --mode resolved to size M above every base order)")
     print(f"trials = {args.trials} per arm, seed = {args.seed}\n")
     print("  arm                success  95% CI (Wilson)  rel/basis  mean min |e|_1")
 
