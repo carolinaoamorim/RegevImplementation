@@ -1,6 +1,6 @@
 # Improvements to the Regev Factoring Simulation
 
-Made by Carolina Amorim, Owen Barnes, and Summer Malik during summer research on quantum computing at the University of Illinois at Urbana Champaign.
+Made by Carolina Amorim, Owen Barnes, and Simran Summer Malik during summer research on quantum computing at the University of Illinois at Urbana Champaign.
 
 What changed in this pass, why, and how each claim was verified.
 
