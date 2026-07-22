@@ -10,6 +10,7 @@ import pytest
 
 from regev.bases import generate_regev_bases
 from regev.postprocess import (
+    regev_embedding_scale,
     regev_relation_lattice,
     eval_relation,
     is_relation,
@@ -18,10 +19,9 @@ from regev.postprocess import (
 )
 from regev.sampling import sample_ideal, sample_uniform
 
-# A fixed known-good input for the deterministic unit tests below: the five
-# highest-probability vectors of the exact distribution for N = 77, d = 3,
-# M = 32, bases (4, 9, 25). These are a FIXTURE, not an experiment -- see
-# test_quantum_beats_random_control for the sampled measurement.
+# A fixed known-good input for deterministic unit tests. These were prominent
+# outcomes of the legacy rectangular model and remain relation-rich, but they
+# are only a fixture; the experiment below samples the Gaussian model.
 N77_VECTORS = [(4, 2, 17), (28, 30, 15), (19, 26, 13), (13, 6, 19), (2, 17, 9)]
 N77 = 77
 D77, M77 = 3, 32
@@ -67,12 +67,48 @@ def test_relation_lattice_relations_are_short():
     assert min(nm for nm, _ in rels) <= 4
 
 
-@pytest.mark.parametrize("weight", [1, 2, 4, 8])
-def test_relation_lattice_stable_across_weights(weight):
-    """Result must not be an artifact of the embedding weight."""
-    cands = regev_relation_lattice(N77_VECTORS, M77, D77, weight=weight)
+def test_default_embedding_scale_comes_from_gaussian_error():
+    assert regev_embedding_scale(M77, D77) == round(2 ** 0.5 * D77)
+    assert regev_embedding_scale(M77, D77, radius=8.0) == 5
+
+
+def test_embedding_rejects_radius_that_rounds_scale_to_zero():
+    with pytest.raises(ValueError, match="rounds to zero"):
+        regev_embedding_scale(M77, D77, radius=10_000.0)
+
+
+def test_legacy_weight_is_explicit_and_deprecated():
+    with pytest.warns(DeprecationWarning, match="weight is deprecated"):
+        cands = regev_relation_lattice(N77_VECTORS, M77, D77, weight=4)
+    assert any(is_relation(e, BASES77, N77) for _, e, _ in cands)
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        regev_relation_lattice(
+            N77_VECTORS, M77, D77, weight=4, exponent_scale=4
+        )
+
+    with pytest.warns(DeprecationWarning, match="weight is deprecated"):
+        result = regev_factor(
+            N77_VECTORS,
+            M77,
+            D77,
+            N77,
+            BASES77,
+            PRIMES77,
+            weight=4,
+            verbose=False,
+        )
+    assert result is not None
+
+
+@pytest.mark.parametrize("exponent_scale", [2, 4, 6, 8])
+def test_relation_lattice_stable_near_derived_scale(exponent_scale):
+    """The deterministic fixture remains useful near the derived scale."""
+    cands = regev_relation_lattice(
+        N77_VECTORS, M77, D77, exponent_scale=exponent_scale
+    )
     rels = [e for _, e, _ in cands if is_relation(e, BASES77, N77)]
-    assert len(rels) >= 3
+    assert len(rels) >= 2
 
 
 def test_relation_to_congruence_splits_77():
@@ -109,19 +145,20 @@ def test_quantum_beats_random_control():
     occasionally contains a relation by luck), so this asserts a separation,
     not that random never succeeds.
     """
-    trials, k = 60, 5
-    rng = random.Random(7)
+    trials, k = 60, D77 + 4
+    q_rng = random.Random(7)
+    r_rng = random.Random(8)
 
     q_succ = q_rel = 0
     r_succ = r_rel = 0
     for _ in range(trials):
-        qv = sample_ideal(BASES77, N77, D77, M77, k, rng)
+        qv = sample_ideal(BASES77, N77, D77, M77, k, q_rng)
         q_rel += len([e for _, e, _ in regev_relation_lattice(qv, M77, D77)
                       if is_relation(e, BASES77, N77)])
         q_succ += regev_factor(qv, M77, D77, N77, BASES77, PRIMES77,
                                verbose=False) is not None
 
-        rv = sample_uniform(D77, M77, k, rng)
+        rv = sample_uniform(D77, M77, k, r_rng)
         r_rel += len([e for _, e, _ in regev_relation_lattice(rv, M77, D77)
                       if is_relation(e, BASES77, N77)])
         r_succ += regev_factor(rv, M77, D77, N77, BASES77, PRIMES77,

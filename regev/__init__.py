@@ -1,6 +1,6 @@
-"""Regev's multidimensional factoring algorithm: simulation and analysis."""
+"""Finite Gaussian-state simulation of Regev-style quantum factoring."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from regev.parameters import regev_parameters, validate_factor_input
 from regev.bases import (
@@ -8,10 +8,12 @@ from regev.bases import (
     is_prime_basic,
     is_contaminated,
     multiplicative_order,
+    order_report,
     resolution_report,
 )
 from regev.lattice import lll
 from regev.postprocess import (
+    regev_embedding_scale,
     regev_relation_lattice,
     regev_factor,
     is_relation,
@@ -52,8 +54,10 @@ __all__ = [
     "is_prime_basic",
     "is_contaminated",
     "multiplicative_order",
+    "order_report",
     "resolution_report",
     "lll",
+    "regev_embedding_scale",
     "regev_relation_lattice",
     "regev_factor",
     "is_relation",

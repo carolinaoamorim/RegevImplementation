@@ -5,8 +5,19 @@ without a simulator.
 """
 
 import math
+from operator import index
+import warnings
 
 __all__ = ["validate_factor_input", "regev_parameters"]
+
+
+def _integer(value, name: str) -> int:
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be an integer")
+    try:
+        return index(value)
+    except TypeError:
+        raise TypeError(f"{name} must be an integer") from None
 
 
 def _is_prime(num: int) -> bool:
@@ -37,6 +48,16 @@ def validate_factor_input(N: int) -> dict:
     the rejection itself reveals a factorisation.
     """
     from regev.bases import perfect_power, is_prime_basic
+
+    try:
+        N = _integer(N, "N")
+    except TypeError:
+        return {
+            "valid": False,
+            "reason": "N must be an integer greater than 1.",
+            "factor": None,
+            "other": None,
+        }
 
     if N <= 1:
         return {"valid": False, "reason": "N must be greater than 1.",
@@ -71,7 +92,7 @@ def validate_factor_input(N: int) -> dict:
             "factor": None, "other": None}
 
 
-def regev_parameters(N: int, mode: str = "notebook") -> dict:
+def regev_parameters(N: int, mode: str = "regev") -> dict:
     """Choose register sizes for the Regev-style simulation.
 
     n  = bit length of N
@@ -80,37 +101,55 @@ def regev_parameters(N: int, mode: str = "notebook") -> dict:
     M  = 2^nd, the Fourier modulus per dimension
 
     Args:
-        mode: "cover_2n" sets d*nd >= 2n, matching Shor's total exponent
-            qubit count -- which gives away Regev's asymptotic gate-count
-            advantage and is only useful as a controlled comparison.
-            "regev" uses floor(n/d + d), closer to Regev's true parameter
-            regime; it is the default for that reason. ("notebook" is a
-            deprecated alias -- the name predates this package layout and
-            referred to a notebooks/ directory that no longer exists.)
-            "resolved" enlarges nd until M exceeds every base order, so the
-            near-orthogonality the post-processing relies on actually holds.
-            It requires computing the orders (a simulation-only quantity) and,
-            like "cover_2n", gives up Regev's register-size advantage. Use it
-            when the goal is a clean demonstration rather than a faithful
-            parameter regime -- see the caution below.
+        mode: "cover_2n" sets d*nd >= 2n as a larger comparison budget.
+            "regev" uses floor(n/d + d), a finite-size heuristic inspired by
+            the d + n/d terms in Regev's asymptotic analysis. The paper hides
+            constants and a bound on the sought relation, so this mode must
+            not be read as a theorem-derived parameter set. ("notebook" is a
+            deprecated alias retained for compatibility.)
+            "axis_order" enlarges nd until M exceeds the orders of the chosen
+            generators. This can be a useful finite-box diagnostic, but it is
+            NOT a correctness requirement of Regev's multidimensional
+            algorithm: short cross-coordinate relations can exist even when
+            every individual order exceeds M. "resolved" is retained as a
+            deprecated alias for this mode.
 
-    Caution: the "regev" formula is asymptotic and at these tiny n it routinely
-    produces M <= max base order (e.g. N = 299, 323, 391, 437), where at least
-    one register is under-resolved and the orthogonality argument is unsound.
-    `regev.bases.resolution_report` diagnoses this, and "resolved" mode avoids
-    it. The returned dict always carries a `resolved` flag.
+    The returned Gaussian radius is R = M/(2*sqrt(d)), the largest value that
+    satisfies the paper's finite-window condition M >= 2*sqrt(d)*R. These tiny
+    instances remain demonstrations of the finite model, not evidence for the
+    paper's asymptotic guarantees.
     """
+    N = _integer(N, "N")
+    if N <= 1:
+        raise ValueError("N must be an integer greater than 1")
+
+    if mode == "notebook":
+        warnings.warn(
+            "mode='notebook' is deprecated; use mode='regev'",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        mode = "regev"
+    elif mode == "resolved":
+        warnings.warn(
+            "mode='resolved' was based on an invalid one-dimensional resolution "
+            "criterion; use mode='axis_order' only as a sizing diagnostic",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        mode = "axis_order"
+
     n = N.bit_length()
     d = math.ceil(math.sqrt(n))
 
     if mode == "cover_2n":
         nd = math.ceil((2 * n) / d)
-    elif mode in ("regev", "notebook"):  # "notebook" kept as a back-compat alias
+    elif mode == "regev":
         nd = math.floor((n / d) + d)
-    elif mode == "resolved":
+    elif mode == "axis_order":
         from regev.bases import generate_regev_bases, multiplicative_order
 
-        nd = math.floor((n / d) + d)  # start from the notebook size
+        nd = math.floor((n / d) + d)
         bases, _, trivial = generate_regev_bases(N, d)
         if not trivial:
             max_order = max(multiplicative_order(a, N) for a in bases)
@@ -119,28 +158,32 @@ def regev_parameters(N: int, mode: str = "notebook") -> dict:
                 nd += 1
     else:
         raise ValueError(
-            "mode must be 'regev' (alias 'notebook'), 'cover_2n', or 'resolved'."
+            "mode must be 'regev', 'cover_2n', or 'axis_order' "
+            "(deprecated aliases: 'notebook', 'resolved')."
         )
+
+    M = 2 ** nd
 
     params = {
         "N": N,
         "n": n,
         "d": d,
         "nd": nd,
-        "M": 2 ** nd,
+        "M": M,
+        "D": M,
+        "R": M / (2 * math.sqrt(d)),
         "total_x_qubits": d * nd,
-        # x registers + y (n) + aux (n+1); the multiplier's internal flag
-        # qubit is included in aux.
-        "estimated_total_qubits": d * nd + n + (n + 1),
         "mode": mode,
     }
 
-    # Attach a resolution flag when the instance is clean enough to size one.
-    from regev.bases import generate_regev_bases, resolution_report
+    # Individual generator orders are diagnostic only. They are not a
+    # multidimensional Nyquist/correctness condition.
+    from regev.bases import generate_regev_bases, order_report
 
     bases, _, trivial = generate_regev_bases(N, d)
     if trivial:
-        params["resolved"] = None  # contaminated: resolution is moot
+        params["axis_orders_covered"] = None
     else:
-        params["resolved"] = resolution_report(bases, N, params["M"])["resolved"]
+        report = order_report(bases, N, params["M"])
+        params["axis_orders_covered"] = report["covers_axis_orders"]
     return params

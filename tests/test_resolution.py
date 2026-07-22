@@ -1,123 +1,125 @@
-"""Tests for order computation, the resolution guard, and 'resolved' sizing.
+"""Tests for generator-order diagnostics and finite-model parameters.
 
-The resolution guard is the same species as the contamination and cherry-
-picking guards: it flags an experimental setup that would report a success
-without demonstrating one. Here the failure is a register modulus M too small
-to resolve a base's multiplicative order -- an aliasing limit -- which lets the
-random control succeed as often as the quantum arm (e.g. N = 221 at M = 8).
+Individual generator orders are useful to inspect, but they are not a
+one-dimensional Nyquist condition for Regev's multidimensional lattice.
 """
+
+import math
 
 import pytest
 
 from regev.bases import (
     generate_regev_bases,
     multiplicative_order,
+    order_report,
     resolution_report,
 )
 from regev.parameters import regev_parameters
+from regev.postprocess import is_relation
 
 
-# --- multiplicative_order ----------------------------------------------
-
-@pytest.mark.parametrize("a,N,expected", [
-    (4, 77, 15), (2, 7, 3), (3, 7, 6), (10, 77, 6), (2, 15, 4), (1, 77, 1),
-])
+@pytest.mark.parametrize(
+    "a,N,expected",
+    [(4, 77, 15), (2, 7, 3), (3, 7, 6), (10, 77, 6), (2, 15, 4), (1, 77, 1)],
+)
 def test_multiplicative_order_values(a, N, expected):
     assert multiplicative_order(a, N) == expected
 
 
-def test_multiplicative_order_definition():
-    """a ** order == 1, and no smaller positive power does."""
+def test_multiplicative_order_matches_definition():
     for a, N in ((4, 77), (9, 143), (25, 221)):
-        o = multiplicative_order(a, N)
-        assert pow(a, o, N) == 1
-        assert all(pow(a, k, N) != 1 for k in range(1, o))
+        order = multiplicative_order(a, N)
+        assert pow(a, order, N) == 1
+        assert all(pow(a, k, N) != 1 for k in range(1, order))
 
 
-def test_multiplicative_order_requires_coprime():
-    with pytest.raises(ValueError):
-        multiplicative_order(7, 77)  # gcd(7, 77) = 7
+def test_multiplicative_order_requires_invertible_base():
+    with pytest.raises(ValueError, match="not invertible"):
+        multiplicative_order(7, 77)
 
 
-# --- resolution_report --------------------------------------------------
-
-def test_resolution_flags_undersized_M():
-    """N = 221, M = 8: an order (24) exceeds M, so the instance is degenerate.
-
-    This is the setup where the uniform-random control factors N ~83% of the
-    time -- indistinguishable from the quantum arm, i.e. a vacuous experiment.
-    """
+def test_order_report_describes_axis_coverage():
     bases, _, _ = generate_regev_bases(221, 3)
-    rep = resolution_report(bases, 221, 8)
-    assert rep["resolved"] is False
-    assert rep["max_order"] >= 8
-    assert rep["ratio"] < 1
+    small = order_report(bases, 221, 8)
+    large = order_report(bases, 221, 32)
+
+    assert small["covers_axis_orders"] is False
+    assert small["ratio"] < 1
+    assert large["covers_axis_orders"] is True
+    assert large["ratio"] > 1
 
 
-def test_resolution_passes_when_M_large():
-    bases, _, _ = generate_regev_bases(221, 3)
-    rep = resolution_report(bases, 221, 32)
-    assert rep["resolved"] is True
-    assert rep["ratio"] > 1
+def test_axis_coverage_boundary_is_strict():
+    bases, _, _ = generate_regev_bases(77, 3)
+    assert order_report(bases, 77, 15)["covers_axis_orders"] is False
+    assert order_report(bases, 77, 16)["covers_axis_orders"] is True
 
 
-def test_resolution_boundary_is_strict():
-    """M must strictly exceed the order; M == order still aliases."""
-    bases, _, _ = generate_regev_bases(77, 3)  # all orders 15
-    assert resolution_report(bases, 77, 15)["resolved"] is False
-    assert resolution_report(bases, 77, 16)["resolved"] is True
+def test_axis_orders_are_not_a_multidimensional_validity_guard():
+    """A short cross-axis relation is visible below either axis order.
 
-
-def test_default_formula_can_be_under_resolved():
-    """Documenting the deficiency: 'notebook' under-resolves several clean N.
-
-    Not a bug in a single N -- a property of the Regev-asymptotic formula at
-    simulable sizes. Locked in so the README's claim stays honest.
+    Both generators have order 15 > M, yet (1, -1) is an exact relation. This
+    is the simplest counterexample to the old per-register Nyquist claim.
     """
-    under = [N for N in (187, 209, 299, 323, 391, 437)
-             if regev_parameters(N, "notebook")["resolved"] is False]
-    assert under == [187, 209, 299, 323, 391, 437]
+    bases = [4, 4]
+    report = order_report(bases, 77, 8)
+    assert report["covers_axis_orders"] is False
+    assert is_relation([1, -1], bases, 77)
+    assert "does not determine" in report["reason"]
 
 
-# --- 'resolved' mode ----------------------------------------------------
+def test_resolution_report_is_a_compatibility_alias():
+    with pytest.warns(DeprecationWarning, match="order_report"):
+        report = resolution_report([4, 9, 25], 77, 32)
+    assert report["resolved"] is report["covers_axis_orders"]
+
+
+def test_default_parameters_are_canonical_regev_mode():
+    params = regev_parameters(77)
+    assert params["mode"] == "regev"
+    assert params["D"] == params["M"]
+    assert params["R"] == pytest.approx(params["D"] / (2 * math.sqrt(params["d"])))
+
 
 @pytest.mark.parametrize("N", [187, 209, 299, 323, 391, 437, 527])
-def test_resolved_mode_is_resolved(N):
-    params = regev_parameters(N, "resolved")
-    assert params["resolved"] is True
+def test_axis_order_mode_covers_individual_orders(N):
+    params = regev_parameters(N, "axis_order")
     bases, _, _ = generate_regev_bases(N, params["d"])
-    assert resolution_report(bases, N, params["M"])["resolved"]
+    assert order_report(bases, N, params["M"])["covers_axis_orders"]
+    assert params["axis_orders_covered"] is True
 
 
-def test_resolved_never_smaller_than_notebook():
-    """'resolved' only ever enlarges nd; it must not shrink registers."""
+def test_axis_order_mode_never_shrinks_default_window():
     for N in (77, 143, 187, 299, 437, 527):
-        assert (regev_parameters(N, "resolved")["nd"]
-                >= regev_parameters(N, "notebook")["nd"])
+        assert regev_parameters(N, "axis_order")["nd"] >= regev_parameters(N)["nd"]
 
 
-def test_resolved_leaves_already_resolved_alone():
-    """N = 77 is resolved at the notebook size, so 'resolved' changes nothing."""
-    assert (regev_parameters(77, "resolved")["nd"]
-            == regev_parameters(77, "notebook")["nd"])
+def test_axis_order_mode_leaves_already_covered_instance_unchanged():
+    assert regev_parameters(77, "axis_order")["nd"] == regev_parameters(77)["nd"]
 
 
-def test_parameters_carry_resolution_flag():
-    assert regev_parameters(77)["resolved"] is True
-    assert regev_parameters(437)["resolved"] is False
+def test_default_carries_honestly_named_axis_diagnostic():
+    assert regev_parameters(77)["axis_orders_covered"] is True
+    assert regev_parameters(437)["axis_orders_covered"] is False
 
 
-def test_bad_mode_rejected():
-    with pytest.raises(ValueError):
+def test_deprecated_parameter_aliases_are_canonicalized():
+    with pytest.warns(DeprecationWarning, match="notebook"):
+        notebook = regev_parameters(437, "notebook")
+    with pytest.warns(DeprecationWarning, match="resolved"):
+        resolved = regev_parameters(437, "resolved")
+
+    assert notebook["mode"] == "regev"
+    assert resolved["mode"] == "axis_order"
+
+
+def test_cover_2n_has_enough_exponent_bits():
+    params = regev_parameters(77, "cover_2n")
+    assert params["total_x_qubits"] >= 2 * params["n"]
+
+
+def test_bad_mode_and_modulus_are_rejected():
+    with pytest.raises(ValueError, match="mode must be"):
         regev_parameters(77, mode="nonsense")
-
-
-def test_notebook_is_alias_for_regev():
-    """The 'notebook' name is kept working but 'regev' is the real one."""
-    a = regev_parameters(437, "regev")
-    b = regev_parameters(437, "notebook")
-    assert (a["nd"], a["M"]) == (b["nd"], b["M"])
-
-
-def test_default_mode_is_regev():
-    assert regev_parameters(437)["nd"] == regev_parameters(437, "regev")["nd"]
+    with pytest.raises(ValueError, match="greater than 1"):
+        regev_parameters(1)

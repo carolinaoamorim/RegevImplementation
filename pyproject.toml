@@ -1,22 +1,38 @@
 [project]
 name = "regev-factoring"
-version = "0.1.0"
-description = "Simulation and analysis of Regev's multidimensional factoring algorithm"
+version = "0.2.0"
+description = "Finite Gaussian-state simulation of Regev-style quantum factoring"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Carolina Amorim" },
+    { name = "Owen Barnes" },
+    { name = "Summer Malik" },
+]
 requires-python = ">=3.10"
+keywords = ["quantum-computing", "factoring", "lattice", "regev"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+]
 # numpy is the only hard requirement: it backs the FFT in the exact reference
 # distribution. Qiskit is NOT a dependency -- nothing in the package imports
-# it. It stays available as an extra for future circuit work.
+# it, and this project does not currently provide a gate-level circuit.
 dependencies = [
-    "numpy",
+    "numpy>=1.24",
 ]
+
+[project.urls]
+Repository = "https://github.com/carolinaoamorim/RegevImplementation"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
-plots = ["matplotlib", "pylatexenc"]
-quantum = ["qiskit>=1.0", "qiskit-aer>=0.14"]
 
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -24,4 +40,5 @@ packages = ["regev"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-q --strict-markers"

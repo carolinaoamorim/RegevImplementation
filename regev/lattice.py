@@ -6,16 +6,57 @@ arithmetic is instant and avoids floating-point drift entirely.
 """
 
 from fractions import Fraction
+from operator import index
 
 __all__ = ["lll", "gram_schmidt", "nearest_int"]
 
 
 def _dot(u, v):
-    return sum(a * b for a, b in zip(u, v))
+    return sum(a * b for a, b in zip(u, v, strict=True))
 
 
-def gram_schmidt(B):
-    """Exact Gram-Schmidt. Returns (orthogonal basis, mu coefficients)."""
+def _rows(B):
+    """Materialise a non-ragged matrix, preserving its scalar values."""
+    try:
+        iterator = iter(B)
+    except TypeError:
+        raise TypeError("B must be an iterable of row iterables") from None
+
+    rows = []
+    for i, row in enumerate(iterator):
+        try:
+            rows.append(list(row))
+        except TypeError:
+            raise TypeError(f"B[{i}] must be an iterable") from None
+
+    if not rows:
+        return rows
+    width = len(rows[0])
+    if width == 0:
+        raise ValueError("basis rows must not be empty")
+    for i, row in enumerate(rows[1:], start=1):
+        if len(row) != width:
+            raise ValueError(
+                f"basis rows must all have length {width}; B[{i}] has length {len(row)}"
+            )
+    return rows
+
+
+def _integer_rows(B):
+    """Validate and copy an integer matrix without lossy ``int`` coercion."""
+    rows = _rows(B)
+    for i, row in enumerate(rows):
+        for j, value in enumerate(row):
+            if isinstance(value, bool):
+                raise TypeError(f"B[{i}][{j}] must be an integer, not bool")
+            try:
+                row[j] = index(value)
+            except TypeError:
+                raise TypeError(f"B[{i}][{j}] must be an integer") from None
+    return rows
+
+
+def _gram_schmidt(B):
     n = len(B)
     Bs, mu = [], [[Fraction(0)] * n for _ in range(n)]
     for i in range(n):
@@ -25,9 +66,14 @@ def gram_schmidt(B):
             if dj == 0:
                 continue
             mu[i][j] = _dot([Fraction(x) for x in B[i]], Bs[j]) / dj
-            v = [vk - mu[i][j] * bk for vk, bk in zip(v, Bs[j])]
+            v = [vk - mu[i][j] * bk for vk, bk in zip(v, Bs[j], strict=True)]
         Bs.append(v)
     return Bs, mu
+
+
+def gram_schmidt(B):
+    """Exact Gram-Schmidt. Returns (orthogonal basis, mu coefficients)."""
+    return _gram_schmidt(_rows(B))
 
 
 def nearest_int(f: Fraction) -> int:
@@ -56,12 +102,19 @@ def lll(B, delta=Fraction(99, 100)):
         2^((n-1)/2) factor of the true shortest); it does NOT sort the rows,
         so callers that want them ordered must sort themselves.
     """
-    B = [list(map(int, r)) for r in B]
+    try:
+        valid_delta = Fraction(1, 4) < delta < 1
+    except TypeError:
+        raise TypeError("delta must be a real number") from None
+    if not valid_delta:
+        raise ValueError("delta must be strictly between 1/4 and 1")
+
+    B = _integer_rows(B)
     n = len(B)
     if n <= 1:
         return B
 
-    Bs, mu = gram_schmidt(B)
+    Bs, mu = _gram_schmidt(B)
     norms = [_dot(v, v) for v in Bs]
     half = Fraction(1, 2)
 
@@ -75,7 +128,7 @@ def lll(B, delta=Fraction(99, 100)):
         for j in range(k - 1, -1, -1):
             if abs(mu[k][j]) > half:
                 q = nearest_int(mu[k][j])
-                B[k] = [bk - q * bj for bk, bj in zip(B[k], B[j])]
+                B[k] = [bk - q * bj for bk, bj in zip(B[k], B[j], strict=True)]
                 mu[k][j] -= q
                 for i in range(j):
                     mu[k][i] -= q * mu[j][i]
@@ -95,7 +148,7 @@ def lll(B, delta=Fraction(99, 100)):
                 # input was linearly dependent. Fall back to a full recompute
                 # rather than divide by zero.
                 B[k], B[k - 1] = B[k - 1], B[k]
-                Bs, mu = gram_schmidt(B)
+                Bs, mu = _gram_schmidt(B)
                 norms = [_dot(v, v) for v in Bs]
                 k = max(k - 1, 1)
                 continue

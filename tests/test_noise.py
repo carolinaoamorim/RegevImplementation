@@ -44,6 +44,10 @@ def test_lambda_rejects_bad_input():
         depolarizing_lambda(1.5, 4)
     with pytest.raises(ValueError):
         depolarizing_lambda(0.1, -1)
+    with pytest.raises(TypeError):
+        depolarizing_lambda(True, 4)
+    with pytest.raises(TypeError):
+        noisy_distribution(BASES77, N77, D77, M77, "0.5")
 
 
 # --- noisy_distribution -------------------------------------------------
@@ -87,6 +91,16 @@ def test_tvd_zero_at_no_noise():
     assert noisy_tvd_from_ideal(BASES77, N77, D77, M77, 0.0) == pytest.approx(0.0)
 
 
+def test_zero_noise_tvd_does_not_build_the_distribution(monkeypatch):
+    import regev.noise as noise
+
+    def fail(*args, **kwargs):
+        pytest.fail("zero noise has zero TVD without allocating a distribution")
+
+    monkeypatch.setattr(noise, "ideal_probability_array", fail)
+    assert noisy_tvd_from_ideal(BASES77, N77, D77, M77, 0.0) == 0.0
+
+
 # --- sampling -----------------------------------------------------------
 
 def test_sample_noisy_shape():
@@ -96,10 +110,16 @@ def test_sample_noisy_shape():
 
 
 def test_sample_noisy_lam_zero_matches_ideal():
-    """With lam = 0 every draw is ideal; the interleaved rng call must not
-    perturb the stream in a way that breaks reproducibility."""
+    """The zero-noise endpoint is exactly the ideal seeded sampler."""
     a = sample_noisy(BASES77, N77, D77, M77, 20, 0.0, random.Random(5))
-    b = sample_noisy(BASES77, N77, D77, M77, 20, 0.0, random.Random(5))
+    b = sample_ideal(BASES77, N77, D77, M77, 20, random.Random(5))
+    assert a == b
+
+
+def test_sample_noisy_lam_one_matches_uniform():
+    """The full-noise endpoint is exactly the seeded uniform control."""
+    a = sample_noisy(BASES77, N77, D77, M77, 20, 1.0, random.Random(5))
+    b = sample_uniform(D77, M77, 20, random.Random(5))
     assert a == b
 
 
@@ -107,6 +127,29 @@ def test_sample_noisy_reproducible():
     a = sample_noisy(BASES77, N77, D77, M77, 30, 0.4, random.Random(9))
     b = sample_noisy(BASES77, N77, D77, M77, 30, 0.4, random.Random(9))
     assert a == b
+
+
+def test_sample_noisy_rejects_negative_count():
+    with pytest.raises(ValueError, match="non-negative integer"):
+        sample_noisy(BASES77, N77, D77, M77, -1, 0.4, random.Random(9))
+
+
+@pytest.mark.parametrize("lam", [0.25, 0.75])
+def test_sample_noisy_validates_before_random_branch(lam):
+    """Malformed inputs must fail independently of the branch RNG selects."""
+    with pytest.raises(ValueError, match=r"len\(bases\)"):
+        sample_noisy([], N77, D77, M77, 1, lam, random.Random(9))
+    with pytest.raises(ValueError, match="window"):
+        sample_noisy(
+            BASES77,
+            N77,
+            D77,
+            M77,
+            0,
+            lam,
+            random.Random(9),
+            window="invalid",
+        )
 
 
 def test_sample_noisy_converges_to_mixture():

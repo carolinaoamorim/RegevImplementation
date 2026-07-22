@@ -5,6 +5,7 @@ so it is checked against independently-derived properties rather than against
 stored numbers.
 """
 
+import math
 import random
 
 import pytest
@@ -13,6 +14,7 @@ from regev.reference import (
     bitstring_to_regev_vector,
     counts_to_distribution,
     ideal_regev_distribution,
+    ideal_regev_distribution_array,
     total_variation_distance,
 )
 from regev.sampling import ideal_probability_array, sample_ideal, sample_uniform
@@ -41,10 +43,9 @@ def test_distribution_covers_full_support(dist77):
 def test_zero_vector_is_the_mode(dist77):
     """w = 0 is always the most likely outcome, and carries no information.
 
-    Every group contributes |sum of ones|^2 at w = 0, so the mode is a
-    structural fact, not an accident. A sampler that never returns it is not
-    modelling the real circuit -- which is exactly the flaw in using a
-    hand-picked top-k list.
+    At zero frequency every positive Gaussian amplitude adds in phase; the
+    triangle inequality bounds every other Fourier component by that value.
+    The mode is therefore structural, not an accident.
     """
     mode = max(dist77, key=dist77.get)
     assert mode == (0, 0, 0)
@@ -56,6 +57,73 @@ def test_distribution_far_from_uniform(dist77):
     uniform = 1.0 / M77 ** D77
     tvd = 0.5 * sum(abs(p - uniform) for p in dist77.values())
     assert tvd > 0.5, f"ideal distribution is near-uniform (TVD {tvd})"
+
+
+def test_default_window_is_gaussian():
+    """The public default is Regev's Gaussian, not the legacy rectangle."""
+    import numpy as np
+
+    radius = M77 / (2 * math.sqrt(D77))
+    default = ideal_regev_distribution_array(BASES77, N77, D77, M77)
+    explicit = ideal_regev_distribution_array(
+        BASES77, N77, D77, M77, window="gaussian", radius=radius
+    )
+    uniform = ideal_regev_distribution_array(
+        BASES77, N77, D77, M77, window="uniform"
+    )
+    assert np.array_equal(default, explicit)
+    assert not np.allclose(default, uniform)
+
+
+@pytest.mark.parametrize(
+    "radius", [0.0, -1.0, float("inf"), float("nan"), True, "1.0"]
+)
+def test_gaussian_radius_must_be_finite_and_positive(radius):
+    with pytest.raises((TypeError, ValueError)):
+        ideal_regev_distribution_array(
+            BASES77, N77, D77, M77, radius=radius
+        )
+
+
+def test_gaussian_radius_allows_sensitivity_outside_paper_window():
+    max_radius = M77 / (2 * math.sqrt(D77))
+    # The boundary is the default. Exact finite-window experiments may also
+    # select radii on either side of Regev's preferred asymptotic interval.
+    for radius in (max_radius, max_radius * 2, max_radius / 10):
+        p = ideal_regev_distribution_array(
+            BASES77, N77, D77, M77, radius=radius
+        )
+        assert p.sum() == pytest.approx(1.0, abs=1e-9)
+
+
+def test_window_validation():
+    with pytest.raises(ValueError):
+        ideal_regev_distribution_array(
+            BASES77, N77, D77, M77, window="rectangle"
+        )
+    with pytest.raises(ValueError):
+        ideal_regev_distribution_array(
+            BASES77, N77, D77, M77, window="uniform", radius=1.0
+        )
+
+
+def test_distribution_input_validation():
+    with pytest.raises((TypeError, ValueError)):
+        ideal_regev_distribution_array(BASES77, 1, D77, M77)
+    with pytest.raises(TypeError):
+        ideal_regev_distribution_array(BASES77, 77.0, D77, M77)
+    with pytest.raises(ValueError):
+        ideal_regev_distribution_array(BASES77, N77, 0, M77)
+    with pytest.raises(ValueError):
+        ideal_regev_distribution_array(BASES77, N77, D77, 0)
+    with pytest.raises(ValueError):
+        ideal_regev_distribution_array(BASES77 + [49], N77, D77, M77)
+    with pytest.raises(ValueError):
+        ideal_regev_distribution_array(BASES77[:-1], N77, D77, M77)
+    with pytest.raises(TypeError):
+        ideal_regev_distribution_array([4, 9, 2.5], N77, D77, M77)
+    with pytest.raises(ValueError):
+        ideal_regev_distribution_array([4, 9, 7], N77, D77, M77)
 
 
 def test_tvd_identical_is_zero(dist77):
@@ -96,12 +164,42 @@ def test_bitstring_length_mismatch_raises():
         bitstring_to_regev_vector("0101", 3, 5)
 
 
+def test_bitstring_rejects_nonbinary_and_invalid_dimensions():
+    with pytest.raises(ValueError):
+        bitstring_to_regev_vector("0000x", 1, 5)
+    with pytest.raises(ValueError):
+        bitstring_to_regev_vector("00000", 0, 5)
+    with pytest.raises(ValueError):
+        bitstring_to_regev_vector("00000", 1, 0)
+    with pytest.raises(TypeError):
+        bitstring_to_regev_vector(0, 1, 1)
+
+
 def test_counts_to_distribution_normalises():
     counts = {"0" * 15: 3, "1" * 15: 1}
     dist = counts_to_distribution(counts, 3, 5)
     assert dist[(0, 0, 0)] == pytest.approx(0.75)
     assert dist[(31, 31, 31)] == pytest.approx(0.25)
     assert sum(dist.values()) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("counts", [
+    {},
+    {"0": 0},
+    {"0": -1},
+    {"0": 1.5},
+    {"0": True},
+])
+def test_counts_to_distribution_rejects_invalid_counts(counts):
+    with pytest.raises((TypeError, ValueError)):
+        counts_to_distribution(counts, 1, 1)
+
+
+def test_counts_to_distribution_rejects_nonmapping_and_bad_key():
+    with pytest.raises(TypeError):
+        counts_to_distribution([("0", 1)], 1, 1)
+    with pytest.raises(ValueError):
+        counts_to_distribution({"x": 1}, 1, 1)
 
 
 # --- sampling -----------------------------------------------------------
@@ -111,6 +209,34 @@ def test_sample_ideal_shape_and_range():
     s = sample_ideal(BASES77, N77, D77, M77, 7, rng)
     assert len(s) == 7
     assert all(len(w) == D77 and all(0 <= x < M77 for x in w) for w in s)
+
+
+def test_sampling_argument_validation():
+    rng = random.Random(0)
+    with pytest.raises(ValueError):
+        sample_ideal(BASES77, N77, D77, M77, -1, rng)
+    with pytest.raises(TypeError):
+        sample_ideal(BASES77, N77, D77, M77, 1.5, rng)
+    with pytest.raises(TypeError):
+        sample_ideal(BASES77, N77, D77, M77, 1, object())
+    with pytest.raises(ValueError):
+        sample_uniform(0, M77, 1, rng)
+    with pytest.raises(ValueError):
+        sample_uniform(D77, M77, -1, rng)
+    with pytest.raises(TypeError):
+        sample_uniform(D77, M77, 1, object())
+
+
+def test_zero_samples_do_not_build_the_distribution(monkeypatch):
+    import regev.sampling as sampling
+
+    def fail(*args, **kwargs):
+        pytest.fail("zero samples should not allocate a probability CDF")
+
+    monkeypatch.setattr(sampling, "_cached_cdf", fail)
+    assert sample_ideal(
+        BASES77, N77, D77, M77, 0, random.Random(0)
+    ) == []
 
 
 def test_sample_ideal_is_reproducible():
@@ -128,7 +254,10 @@ def test_sample_ideal_differs_across_seeds():
 def test_sample_ideal_matches_distribution(dist77):
     """Empirical distribution of many draws converges to the exact one."""
     rng = random.Random(11)
-    n = 20000
+    # The Gaussian output spreads mass across more cells than the old
+    # rectangular model, so use enough draws to put the finite-support TVD
+    # below this deliberately coarse convergence threshold reliably.
+    n = 30000
     draws = sample_ideal(BASES77, N77, D77, M77, n, rng)
     emp = {}
     for w in draws:
@@ -138,7 +267,7 @@ def test_sample_ideal_matches_distribution(dist77):
 
 def test_sample_ideal_does_draw_the_zero_vector():
     """A faithful sampler must produce the uninformative outcome sometimes."""
-    draws = sample_ideal(BASES77, N77, D77, M77, 500, random.Random(3))
+    draws = sample_ideal(BASES77, N77, D77, M77, 2000, random.Random(3))
     assert (0, 0, 0) in draws
 
 
@@ -151,6 +280,17 @@ def test_cache_returns_consistent_data():
     assert np.array_equal(a, b)
 
 
+def test_cached_probability_arrays_are_read_only_and_cache_is_bounded():
+    from regev.sampling import _cached_cdf, _cached_probability
+
+    p = ideal_probability_array(BASES77, N77, D77, M77)
+    assert not p.flags.writeable
+    with pytest.raises(ValueError):
+        p.flat[0] = 0.0
+    assert _cached_cdf.cache_info().maxsize == 2
+    assert _cached_probability.cache_info().maxsize == 2
+
+
 def test_array_and_dict_forms_agree(dist77):
     """The dict wrapper must not drift from the array it wraps."""
     p = ideal_probability_array(BASES77, N77, D77, M77)
@@ -158,17 +298,53 @@ def test_array_and_dict_forms_agree(dist77):
     assert max(abs(float(p[w]) - dist77[w]) for w in dist77) < 1e-15
 
 
-def test_single_fft_matches_per_class_construction():
-    """Guard the autocorrelation identity against the definition it replaced.
+def test_single_fft_matches_grouped_gaussian_construction():
+    """Compare the fast lag autocorrelation to the Gaussian circuit directly.
 
-    Groups the M^d exponent vectors by modular-exponentiation image and FFTs
-    each class -- the original O(classes) construction -- and requires the
-    single-FFT engine to reproduce it. Run on a small case so it stays cheap.
+    This oracle starts from Regev's actual Gaussian amplitudes, groups exponent
+    vectors by modular-exponentiation image, and Fourier-transforms every group
+    independently.  It therefore does not reuse the lag-autocorrelation
+    identity implemented by the production path.
     """
     import numpy as np
     from itertools import product as iproduct
 
-    from regev.reference import ideal_regev_distribution_array
+    bases, N, d, M = [4, 9, 25], 77, 3, 8
+    radius = M / (2 * math.sqrt(d))
+    zs = range(-M // 2, M // 2)
+    one_dim_norm = sum(
+        math.exp(-2 * math.pi * z * z / (radius * radius)) for z in zs
+    )
+    state_norm = one_dim_norm ** d
+    groups = {}
+    for z in iproduct(zs, repeat=d):
+        v = 1
+        for ai, zi in zip(bases, z):
+            v = v * pow(ai, zi, N) % N
+        amplitude = math.exp(
+            -math.pi * sum(zi * zi for zi in z) / (radius * radius)
+        ) / math.sqrt(state_norm)
+        groups.setdefault(v, []).append(
+            (tuple(zi + M // 2 for zi in z), amplitude)
+        )
+
+    expected = np.zeros((M,) * d)
+    for entries in groups.values():
+        arr = np.zeros((M,) * d, dtype=complex)
+        for index, amplitude in entries:
+            arr[index] = amplitude
+        expected += np.abs(np.fft.fftn(arr, norm="ortho")) ** 2
+
+    got = ideal_regev_distribution_array(
+        bases, N, d, M, radius=radius
+    )
+    assert np.abs(expected - got).max() < 1e-12
+
+
+def test_uniform_window_matches_legacy_per_class_construction():
+    """The legacy rectangular model remains available only by explicit opt-in."""
+    import numpy as np
+    from itertools import product as iproduct
 
     bases, N, d, M = [4, 9, 25], 77, 3, 8
     groups = {}
@@ -185,7 +361,9 @@ def test_single_fft_matches_per_class_construction():
             arr[x] = 1.0
         expected += np.abs(np.fft.fftn(arr, norm="ortho")) ** 2 / M ** d
 
-    got = ideal_regev_distribution_array(bases, N, d, M)
+    got = ideal_regev_distribution_array(
+        bases, N, d, M, window="uniform"
+    )
     assert np.abs(expected - got).max() < 1e-12
 
 
